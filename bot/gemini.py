@@ -67,7 +67,9 @@ class GeminiClient:
         # Build the structured contents list from history turns.
         contents: list[types.Content] = []
         for i, entry in enumerate(history):
-            text = entry["text"]
+            author = entry.get("author") or ("bot" if entry["role"] == "model" else "user")
+            text = f"[{author}]: {entry['text']}"
+            
             # Prepend context to the very first user turn so the model sees it
             # before any history, without creating an extra artificial turn.
             if i == 0 and context_prefix and entry["role"] == "user":
@@ -115,20 +117,23 @@ class GeminiClient:
         self, existing_profile: str, recent_history: str, user_name: str
     ) -> str:
         prompt = (
-            f"Update the memory profile for {user_name} based on their recent messages.\n\n"
+            f"You are updating the persistent memory profile for user '{user_name}'.\n\n"
             f"Current profile:\n{existing_profile or '(empty)'}\n\n"
-            f"Recent conversation (focus on messages from {user_name}):\n{recent_history}\n\n"
-            f"Write an updated profile in third person (e.g. '{user_name} is...'). "
-            f"Include: interests, job, preferences, facts they shared, communication style. "
-            f"Max 150 words. If nothing new, return the current profile unchanged."
+            f"Recent conversation:\n{recent_history}\n\n"
+            f"INSTRUCTIONS:\n"
+            f"1. Extract ONLY hard, enduring facts about {user_name} (e.g., profession, age, city, core hobbies, deep preferences, family).\n"
+            f"2. STRICTLY IGNORE situational banter, small talk, temporary plans, or topics of current conversation (e.g., discussing today's weather, a specific news event, or a temporary problem).\n"
+            f"3. Do not assume or speculate. Only record facts explicitly stated or strongly implied by {user_name}.\n"
+            f"4. If no NEW enduring facts are found in the recent conversation, you MUST return the exact Current Profile unchanged without adding any new text.\n"
+            f"5. Write in the third person (e.g., '{user_name} is...'). Keep it concise (max 150 words).\n"
         )
         response = self._client.models.generate_content(
             model=self._model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(
-                    "You are a memory assistant. Extract personal facts about a specific user "
-                    "from chat messages and maintain their concise profile. Be factual, no speculation."
+                    "You are a strict memory assistant. Your ONLY job is to extract permanent, long-lasting facts about a user "
+                    "from chat messages. Never record situational chatter, moods, or temporary events. Be objective and factual."
                 ),
             ),
         )

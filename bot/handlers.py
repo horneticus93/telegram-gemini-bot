@@ -100,7 +100,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     author = user.first_name or user.username or "Unknown"
     text = update.message.text
 
-    session_manager.add_message(chat_id, "user", text)
+    session_manager.add_message(chat_id, "user", text, author=author)
 
     msg_count = user_memory.increment_message_count(
         user_id=user.id,
@@ -145,7 +145,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             chat_members=chat_members,
             retrieved_profiles=retrieved_profiles,
         )
-        session_manager.add_message(chat_id, "model", response)
+        session_manager.add_message(chat_id, "model", response, author=bot_username or "bot")
 
         if save_to_profile:
             logger.info("Model flagged save_to_profile for user %s", user.id)
