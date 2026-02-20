@@ -69,14 +69,14 @@ async def _update_user_profile(
     user_id: int, chat_id: int, user_name: str
 ) -> None:
     try:
-        existing_profile = user_memory.get_profile(user_id, chat_id)
+        existing_profile = user_memory.get_profile(user_id)
         recent_history = session_manager.format_history(chat_id)
         new_profile = gemini_client.extract_profile(
             existing_profile=existing_profile,
             recent_history=recent_history,
             user_name=user_name,
         )
-        user_memory.update_profile(user_id, chat_id, new_profile)
+        user_memory.update_profile(user_id, new_profile)
         logger.info("Updated memory profile for user %s (%s)", user_id, user_name)
     except Exception:
         logger.exception("Failed to update profile for user %s", user_id)
@@ -129,7 +129,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _update_user_profile(user.id, chat_id, author)
 
     history = session_manager.format_history(chat_id)
-    user_profile = user_memory.get_profile(user.id, chat_id)
+    user_profile = user_memory.get_profile(user.id)
     chat_members = user_memory.get_chat_members(chat_id)
 
     try:

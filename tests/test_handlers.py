@@ -111,7 +111,7 @@ async def test_increments_user_message_count():
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {10}):
         await handle_message(update, context)
 
-    profile = user_memory.get_profile(user_id=42, chat_id=10)
+    profile = user_memory.get_profile(user_id=42)
     assert isinstance(profile, str)
 
 
@@ -119,7 +119,7 @@ async def test_increments_user_message_count():
 async def test_passes_user_profile_to_gemini():
     from bot.handlers import handle_message, user_memory
     user_memory.increment_message_count(99, 5, "bob", "Bob")  # create row first
-    user_memory.update_profile(user_id=99, chat_id=5, profile="Bob is a chef.")
+    user_memory.update_profile(user_id=99, profile="Bob is a chef.")
     update = make_update("@testbot what should I cook?", chat_id=5, first_name="Bob")
     update.message.from_user.id = 99
     context = make_context(bot_username="testbot")
