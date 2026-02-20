@@ -1,3 +1,4 @@
+import json
 import os
 from google import genai
 from google.genai import types
@@ -9,7 +10,14 @@ SYSTEM_PROMPT = (
     "If you need to search the web for current information, do so and include the answer in this same response. "
     "IMPORTANT: Never say you will look something up and get back later. "
     "Never defer your answer to a future message. "
-    "Always provide your complete answer right now, in this single response."
+    "Always provide your complete answer right now, in this single response.\n\n"
+    "RESPONSE FORMAT: Always reply with a valid JSON object on a single line with exactly two keys:\n"
+    "  {\"answer\": \"<your reply here>\", \"save_to_profile\": <true|false>}\n"
+    "Set save_to_profile to true ONLY when the user is explicitly asking you to remember, "
+    "save, or keep some personal information about themselves "
+    "(e.g. 'remember that I am a developer', 'save that I prefer dark mode'). "
+    "For any normal question or conversation set save_to_profile to false. "
+    "Do NOT wrap the JSON in markdown code fences. Output raw JSON only."
 )
 
 
@@ -17,7 +25,6 @@ class GeminiClient:
     def __init__(self, api_key: str):
         self._client = genai.Client(api_key=api_key)
         self._model = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
-        self._classifier_model = os.getenv("GEMINI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
 
     def ask(
         self,
@@ -25,8 +32,12 @@ class GeminiClient:
         question: str,
         user_profile: str = "",
         chat_members: list[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, bool]:
         """Send a question to Gemini with full multi-turn conversation history.
+
+        Returns:
+            A tuple of (answer_text, save_to_profile) where save_to_profile is
+            True when the user asked to save some personal information.
 
         Args:
             history: List of ``{"role": "user"|"model", "text": str}`` dicts
@@ -87,32 +98,10 @@ class GeminiClient:
                 system_instruction=SYSTEM_PROMPT,
             ),
         )
-        text = response.text
-        if text is None:
+        raw = response.text
+        if raw is None:
             raise ValueError("Gemini returned no text response")
-        return text
-
-
-    def detect_remember_intent(self, message: str) -> bool:
-        """Return True if the user is asking to save / remember some information."""
-        prompt = (
-            "Does the following message express a request to save, remember, or store "
-            "some piece of information about the user? "
-            "Answer with a single word: YES or NO.\n\n"
-            f"Message: {message}"
-        )
-        response = self._client.models.generate_content(
-            model=self._classifier_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are an intent classifier. "
-                    "Reply only with YES or NO, nothing else."
-                ),
-            ),
-        )
-        text = (response.text or "").strip().upper()
-        return text.startswith("YES")
+        return _parse_bot_response(raw)
 
     def extract_profile(
         self, existing_profile: str, recent_history: str, user_name: str
@@ -139,3 +128,25 @@ class GeminiClient:
         if text is None:
             return existing_profile
         return text.strip()
+
+
+def _parse_bot_response(raw: str) -> tuple[str, bool]:
+    """Parse the JSON response from the bot.
+
+    Falls back gracefully if the model didn't honour the JSON format.
+    """
+    text = raw.strip()
+    # Strip markdown code fences if the model added them anyway.
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    try:
+        data = json.loads(text)
+        answer = str(data.get("answer", raw))
+        save = bool(data.get("save_to_profile", False))
+        return answer, save
+    except (json.JSONDecodeError, AttributeError):
+        # Model didn't return valid JSON — treat the whole text as the answer.
+        return raw, False

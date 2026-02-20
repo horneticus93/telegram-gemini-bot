@@ -62,7 +62,7 @@ async def test_replies_when_tagged():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {2}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = "It's noon!"
+            mock_gemini.ask.return_value = ("It's noon!", False)
             await handle_message(update, context)
 
     update.message.reply_text.assert_called_once_with("It's noon!")
@@ -92,7 +92,7 @@ async def test_strips_bot_mention_from_question():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {4}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = "4"
+            mock_gemini.ask.return_value = ("4", False)
             await handle_message(update, context)
 
     call_kwargs = mock_gemini.ask.call_args.kwargs
@@ -126,7 +126,7 @@ async def test_passes_user_profile_to_gemini():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {5}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = "Try pasta!"
+            mock_gemini.ask.return_value = ("Try pasta!", False)
             await handle_message(update, context)
 
     call_kwargs = mock_gemini.ask.call_args.kwargs
@@ -135,7 +135,8 @@ async def test_passes_user_profile_to_gemini():
 
 
 @pytest.mark.asyncio
-async def test_remember_keyword_triggers_immediate_profile_update():
+async def test_save_to_profile_triggers_immediate_profile_update():
+    """When the model sets save_to_profile=True, _update_user_profile is called."""
     from bot.handlers import handle_message
     update = make_update("@testbot remember that I am a pilot", chat_id=6, first_name="Eve")
     update.message.from_user.id = 77
@@ -143,8 +144,7 @@ async def test_remember_keyword_triggers_immediate_profile_update():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {6}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = "Got it, I'll remember that!"
-            mock_gemini.detect_remember_intent.return_value = True
+            mock_gemini.ask.return_value = ("Got it, I'll remember that!", True)
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
@@ -152,3 +152,23 @@ async def test_remember_keyword_triggers_immediate_profile_update():
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
                     mock_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_no_profile_update_when_save_false():
+    """When save_to_profile=False, _update_user_profile is NOT called eagerly."""
+    from bot.handlers import handle_message
+    update = make_update("@testbot what's 2+2?", chat_id=7, first_name="Alice")
+    update.message.from_user.id = 88
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {7}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = ("4", False)
+            with patch("bot.handlers.user_memory") as mock_memory:
+                mock_memory.increment_message_count.return_value = 1
+                mock_memory.get_profile.return_value = ""
+                mock_memory.get_chat_members.return_value = []
+                with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
+                    await handle_message(update, context)
+                    mock_update.assert_not_awaited()

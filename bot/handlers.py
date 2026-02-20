@@ -39,20 +39,17 @@ class _LazyGeminiClient:
 
     def ask(
         self,
-        history: str,
+        history: list[dict],
         question: str,
         user_profile: str = "",
         chat_members: list[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, bool]:
         return self._get().ask(
             history=history,
             question=question,
             user_profile=user_profile,
             chat_members=chat_members,
         )
-
-    def detect_remember_intent(self, message: str) -> bool:
-        return self._get().detect_remember_intent(message)
 
     def extract_profile(
         self, existing_profile: str, recent_history: str, user_name: str
@@ -126,26 +123,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     question = text.replace(f"@{bot_username}", "").strip() or text
 
-    try:
-        is_remember_request = gemini_client.detect_remember_intent(question)
-    except Exception:
-        logger.exception("Failed to detect remember intent")
-        is_remember_request = False
-    if is_remember_request:
-        await _update_user_profile(user.id, chat_id, author)
-
     history = session_manager.get_history(chat_id)
     user_profile = user_memory.get_profile(user.id)
     chat_members = user_memory.get_chat_members(chat_id)
 
     try:
-        response = gemini_client.ask(
+        response, save_to_profile = gemini_client.ask(
             history=history,
             question=question,
             user_profile=user_profile,
             chat_members=chat_members,
         )
         session_manager.add_message(chat_id, "model", response)
+
+        if save_to_profile:
+            logger.info("Model flagged save_to_profile for user %s", user.id)
+            await _update_user_profile(user.id, chat_id, author)
+
         if len(response) <= 4096:
             await update.message.reply_text(response)
         else:
