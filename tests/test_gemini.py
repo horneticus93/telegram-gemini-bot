@@ -63,3 +63,71 @@ def test_ask_raises_on_none_response(mock_client_cls):
     client = GeminiClient(api_key="fake-key")
     with pytest.raises(ValueError, match="no text response"):
         client.ask(history="", question="test")
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_includes_user_profile_in_prompt(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "Answer"
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history="", question="What should I eat?", user_profile="Alice loves Italian food.")
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    assert "Alice loves Italian food." in contents
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_without_profile_omits_profile_section(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "Answer"
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history="", question="Hello", user_profile="", chat_members=[])
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    assert "Profile" not in contents
+    assert "Members" not in contents
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_includes_chat_members_in_prompt(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "Answer"
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history="", question="Who's here?", user_profile="", chat_members=["Alice", "Bob"])
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    assert "Alice" in contents
+    assert "Bob" in contents
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_profile_returns_text(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "Alice is a nurse who likes hiking."
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_profile(
+        existing_profile="",
+        recent_history="[Alice]: I just got back from a hike",
+        user_name="Alice",
+    )
+    assert result == "Alice is a nurse who likes hiking."
+    mock_client.models.generate_content.assert_called_once()
