@@ -20,9 +20,17 @@ def test_rolling_window_drops_oldest():
     sm.add_message(1, "A", "msg3")
     sm.add_message(1, "A", "msg4")  # should push out msg1
     history = sm.get_history(1)
-    assert len(history) == 3
-    assert "[A]: msg1" not in history
-    assert "[A]: msg4" in history
+    assert history == ["[A]: msg2", "[A]: msg3", "[A]: msg4"]
+
+
+def test_rolling_window_preserves_order():
+    sm = SessionManager(max_messages=3)
+    sm.add_message(1, "A", "first")
+    sm.add_message(1, "B", "second")
+    sm.add_message(1, "C", "third")
+    sm.add_message(1, "D", "fourth")  # evicts "first"
+    result = sm.format_history(1)
+    assert result == "[B]: second\n[C]: third\n[D]: fourth"
 
 
 def test_format_history_joins_with_newlines():
