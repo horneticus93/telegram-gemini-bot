@@ -16,7 +16,6 @@ ALLOWED_CHAT_IDS: set[int] = {
 }
 
 MEMORY_UPDATE_INTERVAL = int(os.getenv("MEMORY_UPDATE_INTERVAL", "10"))
-REMEMBER_TRIGGERS = {"remember", "запам'ятай", "запомни"}
 
 session_manager = SessionManager(
     max_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
@@ -124,7 +123,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     question = text.replace(f"@{bot_username}", "").strip() or text
 
-    is_remember_request = any(kw in text.lower() for kw in REMEMBER_TRIGGERS)
+    try:
+        is_remember_request = gemini_client.detect_remember_intent(question)
+    except Exception:
+        logger.exception("Failed to detect remember intent")
+        is_remember_request = False
     if is_remember_request:
         await _update_user_profile(user.id, chat_id, author)
 

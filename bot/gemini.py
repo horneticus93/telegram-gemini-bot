@@ -16,7 +16,8 @@ SYSTEM_PROMPT = (
 class GeminiClient:
     def __init__(self, api_key: str):
         self._client = genai.Client(api_key=api_key)
-        self._model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self._model = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+        self._classifier_model = os.getenv("GEMINI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
 
     def ask(
         self,
@@ -59,6 +60,27 @@ class GeminiClient:
         if text is None:
             raise ValueError("Gemini returned no text response")
         return text
+
+    def detect_remember_intent(self, message: str) -> bool:
+        """Return True if the user is asking to save / remember some information."""
+        prompt = (
+            "Does the following message express a request to save, remember, or store "
+            "some piece of information about the user? "
+            "Answer with a single word: YES or NO.\n\n"
+            f"Message: {message}"
+        )
+        response = self._client.models.generate_content(
+            model=self._classifier_model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are an intent classifier. "
+                    "Reply only with YES or NO, nothing else."
+                ),
+            ),
+        )
+        text = (response.text or "").strip().upper()
+        return text.startswith("YES")
 
     def extract_profile(
         self, existing_profile: str, recent_history: str, user_name: str
