@@ -32,4 +32,7 @@ class GeminiClient:
                 system_instruction=SYSTEM_PROMPT,
             ),
         )
-        return response.text
+        text = response.text
+        if text is None:
+            raise ValueError("Gemini returned no text response")
+        return text

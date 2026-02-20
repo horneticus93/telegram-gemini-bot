@@ -45,4 +45,21 @@ def test_ask_with_empty_history(mock_client_cls):
 
     client = GeminiClient(api_key="fake-key")
     result = client.ask(history="", question="Say hello")
+
     assert result == "Hello!"
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs["contents"]
+    assert contents == "Say hello"  # bare question, no history wrapper
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_raises_on_none_response(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = None
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    with pytest.raises(ValueError, match="no text response"):
+        client.ask(history="", question="test")
