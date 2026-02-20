@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Give the bot a persistent SQLite memory of each user — their name, interests, facts, and communication style — injected into every Gemini request so conversations feel personal.
+**Goal:** Give the bot a persistent SQLite memory of each user — their name, interests, facts, and communication style — plus silent awareness of who is in each chat, injected into every Gemini request so conversations feel personal.
 
-**Architecture:** A new `bot/memory.py` module wraps SQLite (stdlib `sqlite3`, no extra deps) and stores one profile per Telegram user ID. After every `MEMORY_UPDATE_INTERVAL` messages from a user, a fire-and-forget async task calls Gemini to extract new facts and update the profile. The profile is loaded and injected into every `ask()` call. The SQLite file lives at `/app/data/memory.db` inside the container, mounted to a named Docker volume so it survives restarts and rebuilds.
+**Architecture:** A new `bot/memory.py` module wraps SQLite (stdlib `sqlite3`, no extra deps). The table is keyed by `(user_id, chat_id)` so profiles are per-person-per-chat and member lists come for free. After every `MEMORY_UPDATE_INTERVAL` messages from a user, a fire-and-forget async task calls Gemini to extract new facts and update the profile. Every `ask()` call receives the user's profile and the list of known chat members. The SQLite file lives at `/app/data/memory.db` inside the container, mounted to a named Docker volume so it survives restarts and rebuilds.
 
 **Tech Stack:** Python `sqlite3` (stdlib), existing `google-genai` SDK for profile extraction, Docker named volume.
 
@@ -20,7 +20,6 @@
 
 ```python
 import pytest
-import os
 from bot.memory import UserMemory
 
 
@@ -30,39 +29,50 @@ def mem(tmp_path):
 
 
 def test_first_message_count_is_one(mem):
-    count = mem.increment_message_count(user_id=1, username="alice", first_name="Alice")
+    count = mem.increment_message_count(user_id=1, chat_id=100, username="alice", first_name="Alice")
     assert count == 1
 
 
 def test_message_count_accumulates(mem):
-    mem.increment_message_count(1, "alice", "Alice")
-    mem.increment_message_count(1, "alice", "Alice")
-    count = mem.increment_message_count(1, "alice", "Alice")
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    count = mem.increment_message_count(1, 100, "alice", "Alice")
     assert count == 3
 
 
 def test_different_users_have_independent_counts(mem):
-    mem.increment_message_count(1, "alice", "Alice")
-    count = mem.increment_message_count(2, "bob", "Bob")
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    count = mem.increment_message_count(2, 100, "bob", "Bob")
+    assert count == 1
+
+
+def test_same_user_different_chats_have_independent_counts(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    count = mem.increment_message_count(1, 200, "alice", "Alice")
     assert count == 1
 
 
 def test_get_profile_unknown_user_returns_empty(mem):
-    assert mem.get_profile(user_id=999) == ""
+    assert mem.get_profile(user_id=999, chat_id=100) == ""
 
 
 def test_update_and_get_profile(mem):
-    mem.increment_message_count(1, "alice", "Alice")
-    mem.update_profile(user_id=1, profile="Alice is a software engineer who loves cats.")
-    assert mem.get_profile(1) == "Alice is a software engineer who loves cats."
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.update_profile(user_id=1, chat_id=100, profile="Alice is a software engineer who loves cats.")
+    assert mem.get_profile(1, 100) == "Alice is a software engineer who loves cats."
 
 
-def test_increment_updates_stored_name(mem):
-    mem.increment_message_count(1, "alice_old", "Alice Old")
-    mem.increment_message_count(1, "alice_new", "Alice New")
-    # No crash, count is 2
-    count = mem.increment_message_count(1, "alice_new", "Alice New")
-    assert count == 3
+def test_get_chat_members_returns_known_first_names(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.increment_message_count(2, 100, "bob", "Bob")
+    mem.increment_message_count(3, 200, "carol", "Carol")  # different chat
+    members = mem.get_chat_members(chat_id=100)
+    assert set(members) == {"Alice", "Bob"}
+    assert "Carol" not in members
+
+
+def test_get_chat_members_empty_chat_returns_empty(mem):
+    assert mem.get_chat_members(chat_id=999) == []
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -91,55 +101,67 @@ class UserMemory:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_profiles (
-                    user_id     INTEGER PRIMARY KEY,
+                    user_id     INTEGER,
+                    chat_id     INTEGER,
                     username    TEXT,
                     first_name  TEXT,
                     profile     TEXT    DEFAULT '',
                     msg_count   INTEGER DEFAULT 0,
-                    updated_at  TEXT
+                    updated_at  TEXT,
+                    PRIMARY KEY (user_id, chat_id)
                 )
             """)
             conn.commit()
 
     def increment_message_count(
-        self, user_id: int, username: str, first_name: str
+        self, user_id: int, chat_id: int, username: str, first_name: str
     ) -> int:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                INSERT INTO user_profiles (user_id, username, first_name, msg_count)
-                VALUES (?, ?, ?, 1)
-                ON CONFLICT(user_id) DO UPDATE SET
+                INSERT INTO user_profiles (user_id, chat_id, username, first_name, msg_count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(user_id, chat_id) DO UPDATE SET
                     msg_count  = msg_count + 1,
                     username   = excluded.username,
                     first_name = excluded.first_name
                 """,
-                (user_id, username, first_name),
+                (user_id, chat_id, username, first_name),
             )
             conn.commit()
             row = conn.execute(
-                "SELECT msg_count FROM user_profiles WHERE user_id = ?", (user_id,)
+                "SELECT msg_count FROM user_profiles WHERE user_id = ? AND chat_id = ?",
+                (user_id, chat_id),
             ).fetchone()
             return row[0]
 
-    def get_profile(self, user_id: int) -> str:
+    def get_profile(self, user_id: int, chat_id: int) -> str:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT profile FROM user_profiles WHERE user_id = ?", (user_id,)
+                "SELECT profile FROM user_profiles WHERE user_id = ? AND chat_id = ?",
+                (user_id, chat_id),
             ).fetchone()
             return row[0] if row and row[0] else ""
 
-    def update_profile(self, user_id: int, profile: str) -> None:
+    def update_profile(self, user_id: int, chat_id: int, profile: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 UPDATE user_profiles
                 SET profile = ?, updated_at = ?
-                WHERE user_id = ?
+                WHERE user_id = ? AND chat_id = ?
                 """,
-                (profile, datetime.now(timezone.utc).isoformat(), user_id),
+                (profile, datetime.now(timezone.utc).isoformat(), user_id, chat_id),
             )
             conn.commit()
+
+    def get_chat_members(self, chat_id: int) -> list[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT first_name FROM user_profiles WHERE chat_id = ? ORDER BY first_name",
+                (chat_id,),
+            ).fetchall()
+            return [row[0] for row in rows]
 ```
 
 **Step 4: Run tests to verify they pass**
@@ -148,24 +170,24 @@ class UserMemory:
 source .venv/bin/activate && pytest tests/test_memory.py -v
 ```
 
-Expected: All 6 tests PASS.
+Expected: All 8 tests PASS.
 
 **Step 5: Commit**
 
 ```bash
 git add bot/memory.py tests/test_memory.py
-git commit -m "feat: UserMemory module with SQLite persistence"
+git commit -m "feat: UserMemory module with per-chat SQLite persistence and member list"
 ```
 
 ---
 
-## Task 2: Gemini profile extraction + user_profile in ask()
+## Task 2: Gemini profile extraction + user_profile + chat_members in ask()
 
 **Files:**
 - Modify: `bot/gemini.py`
 - Modify: `tests/test_gemini.py`
 
-**Step 1: Add 3 new tests to `tests/test_gemini.py`** — append after the existing 4 tests:
+**Step 1: Add 4 new tests to `tests/test_gemini.py`** — append after the existing 4 tests:
 
 ```python
 @patch("bot.gemini.genai.Client")
@@ -193,11 +215,29 @@ def test_ask_without_profile_omits_profile_section(mock_client_cls):
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
-    client.ask(history="", question="Hello", user_profile="")
+    client.ask(history="", question="Hello", user_profile="", chat_members=[])
 
     call_kwargs = mock_client.models.generate_content.call_args
     contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
     assert "Profile" not in contents
+    assert "Members" not in contents
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_includes_chat_members_in_prompt(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "Answer"
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history="", question="Who's here?", user_profile="", chat_members=["Alice", "Bob"])
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    assert "Alice" in contents
+    assert "Bob" in contents
 
 
 @patch("bot.gemini.genai.Client")
@@ -221,12 +261,12 @@ def test_extract_profile_returns_text(mock_client_cls):
 **Step 2: Run new tests to verify they fail**
 
 ```bash
-source .venv/bin/activate && pytest tests/test_gemini.py -v -k "profile"
+source .venv/bin/activate && pytest tests/test_gemini.py -v -k "profile or members"
 ```
 
-Expected: FAIL (3 tests, AttributeError or assertion errors)
+Expected: FAIL
 
-**Step 3: Update `bot/gemini.py`** — replace the entire file with:
+**Step 3: Replace `bot/gemini.py`** with exactly this content:
 
 ```python
 import os
@@ -249,22 +289,32 @@ class GeminiClient:
         self._client = genai.Client(api_key=api_key)
         self._model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-    def ask(self, history: str, question: str, user_profile: str = "") -> str:
-        profile_section = (
-            f"\n\nProfile of the person asking:\n{user_profile}"
-            if user_profile
-            else ""
-        )
+    def ask(
+        self,
+        history: str,
+        question: str,
+        user_profile: str = "",
+        chat_members: list[str] | None = None,
+    ) -> str:
+        context_parts = []
+        if user_profile:
+            context_parts.append(f"Profile of the person asking:\n{user_profile}")
+        if chat_members:
+            context_parts.append(
+                f"Known members in this chat: {', '.join(chat_members)}"
+            )
+        context_block = ("\n\n" + "\n\n".join(context_parts)) if context_parts else ""
+
         if history:
             contents = (
                 f"Here is the recent group conversation:\n\n{history}"
-                f"{profile_section}"
+                f"{context_block}"
                 f"\n\nNow answer this: {question}"
             )
         else:
             contents = (
-                f"{profile_section.strip()}\n\n{question}".strip()
-                if user_profile
+                f"{context_block.strip()}\n\n{question}".strip()
+                if context_block
                 else question
             )
 
@@ -314,13 +364,15 @@ class GeminiClient:
 source .venv/bin/activate && pytest -v
 ```
 
-Expected: All 25 tests PASS (6 memory + 7 gemini + 5 handlers + 7 session).
+Expected: All 28 tests PASS (8 memory + 8 gemini + 5 handlers + 7 session).
+
+Note: handler tests will grow to 8 in Task 3.
 
 **Step 5: Commit**
 
 ```bash
 git add bot/gemini.py tests/test_gemini.py
-git commit -m "feat: add user_profile to ask(), add extract_profile method"
+git commit -m "feat: inject user profile and chat members into Gemini prompt"
 ```
 
 ---
@@ -331,7 +383,7 @@ git commit -m "feat: add user_profile to ask(), add extract_profile method"
 - Modify: `bot/handlers.py`
 - Modify: `tests/test_handlers.py`
 
-**Step 1: Add 2 new tests to `tests/test_handlers.py`** — append after the existing 5 tests:
+**Step 1: Add 3 new tests to `tests/test_handlers.py`** — append after the existing 5 tests:
 
 ```python
 @pytest.mark.asyncio
@@ -344,15 +396,14 @@ async def test_increments_user_message_count():
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {10}):
         await handle_message(update, context)
 
-    count = user_memory.get_profile(42)  # profile empty but user exists
-    # Just verify no crash and count was incremented (profile may be empty)
-    assert isinstance(count, str)
+    profile = user_memory.get_profile(user_id=42, chat_id=10)
+    assert isinstance(profile, str)
 
 
 @pytest.mark.asyncio
 async def test_passes_user_profile_to_gemini():
     from bot.handlers import handle_message, user_memory
-    user_memory.update_profile(user_id=99, profile="Bob is a chef.")
+    user_memory.update_profile(user_id=99, chat_id=5, profile="Bob is a chef.")
     update = make_update("@testbot what should I cook?", chat_id=5, first_name="Bob")
     update.message.from_user.id = 99
     context = make_context(bot_username="testbot")
@@ -365,12 +416,28 @@ async def test_passes_user_profile_to_gemini():
     call_kwargs = mock_gemini.ask.call_args.kwargs
     profile = call_kwargs.get("user_profile") or ""
     assert "Bob is a chef." in profile
+
+
+@pytest.mark.asyncio
+async def test_remember_keyword_triggers_immediate_profile_update():
+    from bot.handlers import handle_message
+    update = make_update("@testbot remember that I am a pilot", chat_id=6, first_name="Eve")
+    update.message.from_user.id = 77
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {6}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = "Got it, I'll remember that!"
+            with patch("bot.handlers._update_user_profile") as mock_update:
+                mock_update.return_value = None
+                await handle_message(update, context)
+                mock_update.assert_awaited_once()
 ```
 
 **Step 2: Run new tests to verify they fail**
 
 ```bash
-source .venv/bin/activate && pytest tests/test_handlers.py -v -k "memory or profile"
+source .venv/bin/activate && pytest tests/test_handlers.py -v -k "memory or profile or remember"
 ```
 
 Expected: FAIL
@@ -396,6 +463,7 @@ ALLOWED_CHAT_IDS: set[int] = {
 }
 
 MEMORY_UPDATE_INTERVAL = int(os.getenv("MEMORY_UPDATE_INTERVAL", "10"))
+REMEMBER_TRIGGERS = {"remember", "запам'ятай", "запомни"}
 
 session_manager = SessionManager(
     max_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
@@ -417,23 +485,36 @@ class _LazyGeminiClient:
             self._client = GeminiClient(api_key=os.getenv("GEMINI_API_KEY", ""))
         return self._client
 
-    def ask(self, history: str, question: str, user_profile: str = "") -> str:
-        return self._get().ask(history=history, question=question, user_profile=user_profile)
+    def ask(
+        self,
+        history: str,
+        question: str,
+        user_profile: str = "",
+        chat_members: list[str] | None = None,
+    ) -> str:
+        return self._get().ask(
+            history=history,
+            question=question,
+            user_profile=user_profile,
+            chat_members=chat_members,
+        )
 
 
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
 
-async def _update_user_profile(user_id: int, user_name: str, chat_id: int) -> None:
+async def _update_user_profile(
+    user_id: int, chat_id: int, user_name: str
+) -> None:
     try:
-        existing_profile = user_memory.get_profile(user_id)
+        existing_profile = user_memory.get_profile(user_id, chat_id)
         recent_history = session_manager.format_history(chat_id)
         new_profile = gemini_client._get().extract_profile(
             existing_profile=existing_profile,
             recent_history=recent_history,
             user_name=user_name,
         )
-        user_memory.update_profile(user_id, new_profile)
+        user_memory.update_profile(user_id, chat_id, new_profile)
         logger.info("Updated memory profile for user %s (%s)", user_id, user_name)
     except Exception:
         logger.exception("Failed to update profile for user %s", user_id)
@@ -457,11 +538,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     msg_count = user_memory.increment_message_count(
         user_id=user.id,
+        chat_id=chat_id,
         username=user.username or "",
         first_name=author,
     )
     if msg_count % MEMORY_UPDATE_INTERVAL == 0:
-        asyncio.create_task(_update_user_profile(user.id, author, chat_id))
+        asyncio.create_task(_update_user_profile(user.id, chat_id, author))
 
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
@@ -474,14 +556,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     question = text.replace(f"@{bot_username}", "").strip() or text
+
+    is_remember_request = any(kw in text.lower() for kw in REMEMBER_TRIGGERS)
+    if is_remember_request:
+        await _update_user_profile(user.id, chat_id, author)
+
     history = session_manager.format_history(chat_id)
-    user_profile = user_memory.get_profile(user.id)
+    user_profile = user_memory.get_profile(user.id, chat_id)
+    chat_members = user_memory.get_chat_members(chat_id)
 
     try:
         response = gemini_client.ask(
             history=history,
             question=question,
             user_profile=user_profile,
+            chat_members=chat_members,
         )
         if len(response) <= 4096:
             await update.message.reply_text(response)
@@ -501,13 +590,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 source .venv/bin/activate && pytest -v
 ```
 
-Expected: All 27 tests PASS.
+Expected: All 31 tests PASS (8 memory + 8 gemini + 8 handlers + 7 session).
 
 **Step 5: Commit**
 
 ```bash
 git add bot/handlers.py tests/test_handlers.py
-git commit -m "feat: wire user memory into message handler"
+git commit -m "feat: wire user memory, chat members, and remember trigger into handler"
 ```
 
 ---
@@ -539,7 +628,7 @@ volumes:
   bot_data:
 ```
 
-**Step 2: Update `.env.example`** — add two new variables after `GEMINI_MODEL`:
+**Step 2: Update `.env.example`** — replace entire file with:
 
 ```
 TELEGRAM_BOT_TOKEN=your_token_here
@@ -551,8 +640,9 @@ ALLOWED_CHAT_IDS=-100123456789
 MAX_HISTORY_MESSAGES=100
 ```
 
-**Step 3: Add `data/` to `.dockerignore`** — append one line:
+**Step 3: Append `data/` to `.dockerignore`**
 
+Add this line at the end of `.dockerignore`:
 ```
 data/
 ```
@@ -563,13 +653,13 @@ data/
 source .venv/bin/activate && pytest -v
 ```
 
-Expected: All 27 tests PASS.
+Expected: All 31 tests PASS.
 
 **Step 5: Commit**
 
 ```bash
 git add docker-compose.yml .env.example .dockerignore
-git commit -m "chore: add Docker volume for SQLite persistence, document new env vars"
+git commit -m "chore: Docker volume for SQLite persistence, updated env vars"
 ```
 
 ---
@@ -608,56 +698,58 @@ sudo docker compose logs -f
 
 Expected: `Bot starting, polling for updates...` with no errors.
 
-After 10 messages from any user, you should see in the logs:
+After 10 messages from any user, you should see:
 ```
 Updated memory profile for user <id> (<name>)
 ```
 
 **Step 4: Inspect stored profiles (optional)**
 
-To peek at what the bot has remembered, SSH into the NAS and run:
-
 ```bash
 sudo docker compose exec bot python3 -c "
 import sqlite3
 conn = sqlite3.connect('/app/data/memory.db')
-for row in conn.execute('SELECT first_name, profile, msg_count FROM user_profiles'):
+for row in conn.execute('SELECT first_name, chat_id, profile, msg_count FROM user_profiles'):
     print(row)
 "
 ```
 
 ---
 
-## Full expected test suite
+## Full expected test suite (31 tests)
 
 ```
-tests/test_memory.py::test_first_message_count_is_one             PASSED
-tests/test_memory.py::test_message_count_accumulates              PASSED
-tests/test_memory.py::test_different_users_have_independent_counts PASSED
-tests/test_memory.py::test_get_profile_unknown_user_returns_empty  PASSED
-tests/test_memory.py::test_update_and_get_profile                 PASSED
-tests/test_memory.py::test_increment_updates_stored_name          PASSED
-tests/test_gemini.py::test_ask_calls_generate_content             PASSED
-tests/test_gemini.py::test_ask_includes_history_in_prompt         PASSED
-tests/test_gemini.py::test_ask_with_empty_history                 PASSED
-tests/test_gemini.py::test_ask_raises_on_none_response            PASSED
-tests/test_gemini.py::test_ask_includes_user_profile_in_prompt    PASSED
-tests/test_gemini.py::test_ask_without_profile_omits_profile_section PASSED
-tests/test_gemini.py::test_extract_profile_returns_text           PASSED
-tests/test_handlers.py::test_ignores_disallowed_chat              PASSED
-tests/test_handlers.py::test_stores_message_without_tag           PASSED
-tests/test_handlers.py::test_replies_when_tagged                  PASSED
-tests/test_handlers.py::test_replies_with_error_on_gemini_failure PASSED
-tests/test_handlers.py::test_strips_bot_mention_from_question     PASSED
-tests/test_handlers.py::test_increments_user_message_count        PASSED
-tests/test_handlers.py::test_passes_user_profile_to_gemini        PASSED
-tests/test_session.py::test_add_and_get_single_message            PASSED
-tests/test_session.py::test_empty_history_for_unknown_chat        PASSED
-tests/test_session.py::test_rolling_window_drops_oldest           PASSED
-tests/test_session.py::test_rolling_window_preserves_order        PASSED
-tests/test_session.py::test_format_history_joins_with_newlines    PASSED
-tests/test_session.py::test_format_history_empty_chat             PASSED
-tests/test_session.py::test_separate_chats_dont_mix               PASSED
+tests/test_memory.py::test_first_message_count_is_one                    PASSED
+tests/test_memory.py::test_message_count_accumulates                     PASSED
+tests/test_memory.py::test_different_users_have_independent_counts       PASSED
+tests/test_memory.py::test_same_user_different_chats_have_independent_counts PASSED
+tests/test_memory.py::test_get_profile_unknown_user_returns_empty        PASSED
+tests/test_memory.py::test_update_and_get_profile                        PASSED
+tests/test_memory.py::test_get_chat_members_returns_known_first_names    PASSED
+tests/test_memory.py::test_get_chat_members_empty_chat_returns_empty     PASSED
+tests/test_gemini.py::test_ask_calls_generate_content                    PASSED
+tests/test_gemini.py::test_ask_includes_history_in_prompt                PASSED
+tests/test_gemini.py::test_ask_with_empty_history                        PASSED
+tests/test_gemini.py::test_ask_raises_on_none_response                   PASSED
+tests/test_gemini.py::test_ask_includes_user_profile_in_prompt           PASSED
+tests/test_gemini.py::test_ask_without_profile_omits_profile_section     PASSED
+tests/test_gemini.py::test_ask_includes_chat_members_in_prompt           PASSED
+tests/test_gemini.py::test_extract_profile_returns_text                  PASSED
+tests/test_handlers.py::test_ignores_disallowed_chat                     PASSED
+tests/test_handlers.py::test_stores_message_without_tag                  PASSED
+tests/test_handlers.py::test_replies_when_tagged                         PASSED
+tests/test_handlers.py::test_replies_with_error_on_gemini_failure        PASSED
+tests/test_handlers.py::test_strips_bot_mention_from_question            PASSED
+tests/test_handlers.py::test_increments_user_message_count               PASSED
+tests/test_handlers.py::test_passes_user_profile_to_gemini               PASSED
+tests/test_handlers.py::test_remember_keyword_triggers_immediate_profile_update PASSED
+tests/test_session.py::test_add_and_get_single_message                   PASSED
+tests/test_session.py::test_empty_history_for_unknown_chat               PASSED
+tests/test_session.py::test_rolling_window_drops_oldest                  PASSED
+tests/test_session.py::test_rolling_window_preserves_order               PASSED
+tests/test_session.py::test_format_history_joins_with_newlines           PASSED
+tests/test_session.py::test_format_history_empty_chat                    PASSED
+tests/test_session.py::test_separate_chats_dont_mix                      PASSED
 
-27 passed
+31 passed
 ```

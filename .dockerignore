@@ -12,3 +12,4 @@ requirements-dev.txt
 pytest.ini
 .env.example
 .gitignore
+data/
