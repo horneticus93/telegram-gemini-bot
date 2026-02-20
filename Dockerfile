@@ -12,4 +12,4 @@ RUN adduser --disabled-password --no-create-home botuser \
     && chown -R botuser:botuser /app
 USER botuser
 
-CMD ["python", "-m", "bot.main"]
+CMD ["sh", "-c", "alembic upgrade head && python -m bot.main"]

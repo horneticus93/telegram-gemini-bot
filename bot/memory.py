@@ -1,4 +1,6 @@
+import json
 import logging
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,85 +12,9 @@ class UserMemory:
     def __init__(self, db_path: str = "/app/data/memory.db"):
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _init_db(self) -> None:
+        # Alembic now handles schema creation; we just ensure WAL mode is on for performance
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            self._maybe_migrate(conn)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_profiles (
-                    user_id    INTEGER PRIMARY KEY,
-                    username   TEXT,
-                    first_name TEXT,
-                    profile    TEXT    DEFAULT '',
-                    msg_count  INTEGER DEFAULT 0,
-                    updated_at TEXT
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS chat_memberships (
-                    user_id INTEGER,
-                    chat_id INTEGER,
-                    PRIMARY KEY (user_id, chat_id)
-                )
-            """)
-            conn.commit()
-
-    def _maybe_migrate(self, conn: sqlite3.Connection) -> None:
-        """Migrate from composite (user_id, chat_id) PK to per-user user_id PK."""
-        cols = [row[1] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()]
-        if not cols or "chat_id" not in cols:
-            return  # fresh install or already migrated
-        logger.info("Migrating user_profiles to per-user schema")
-        try:
-            conn.execute("BEGIN EXCLUSIVE")
-            conn.execute("""
-                CREATE TABLE user_profiles_new (
-                    user_id    INTEGER PRIMARY KEY,
-                    username   TEXT,
-                    first_name TEXT,
-                    profile    TEXT    DEFAULT '',
-                    msg_count  INTEGER DEFAULT 0,
-                    updated_at TEXT
-                )
-            """)
-            conn.execute("""
-                INSERT INTO user_profiles_new (user_id, username, first_name, profile, msg_count)
-                SELECT main.user_id,
-                       MAX(main.username),
-                       MAX(main.first_name),
-                       COALESCE(
-                           (SELECT sub.profile FROM user_profiles sub
-                            WHERE sub.user_id = main.user_id
-                              AND sub.profile IS NOT NULL AND sub.profile != ''
-                            ORDER BY sub.updated_at DESC
-                            LIMIT 1),
-                           ''
-                       ),
-                       SUM(main.msg_count)
-                FROM user_profiles main
-                GROUP BY main.user_id
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS chat_memberships (
-                    user_id INTEGER,
-                    chat_id INTEGER,
-                    PRIMARY KEY (user_id, chat_id)
-                )
-            """)
-            conn.execute("""
-                INSERT OR IGNORE INTO chat_memberships (user_id, chat_id)
-                SELECT DISTINCT user_id, chat_id FROM user_profiles
-            """)
-            conn.execute("DROP TABLE user_profiles")
-            conn.execute("ALTER TABLE user_profiles_new RENAME TO user_profiles")
-            conn.commit()
-            logger.info("Migration complete")
-        except Exception:
-            conn.rollback()
-            logger.exception("Migration failed \u2014 rolled back")
-            raise
 
     def increment_message_count(
         self, user_id: int, chat_id: int, username: str, first_name: str
@@ -124,19 +50,65 @@ class UserMemory:
             ).fetchone()
             return row[0] if row and row[0] else ""
 
-    def update_profile(self, user_id: int, profile: str) -> None:
+    def update_profile(self, user_id: int, profile: str, embedding: list[float] | None = None) -> None:
+        emb_json = json.dumps(embedding) if embedding else None
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
                 UPDATE user_profiles
-                SET profile = ?, updated_at = ?
+                SET profile = ?, profile_embedding = ?, updated_at = ?
                 WHERE user_id = ?
                 """,
-                (profile, datetime.now(timezone.utc).isoformat(), user_id),
+                (profile, emb_json, datetime.now(timezone.utc).isoformat(), user_id),
             )
             conn.commit()
             if cursor.rowcount == 0:
                 logger.warning("update_profile: no row found for user_id=%s", user_id)
+
+    def search_profiles_by_embedding(self, query_embedding: list[float], limit: int = 5) -> list[tuple[str, str]]:
+        """Search across all user profiles and return the top `limit` matches based on cosine similarity."""
+        if not query_embedding:
+            return []
+            
+        profiles_with_embeddings = []
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT first_name, profile, profile_embedding FROM user_profiles "
+                "WHERE profile_embedding IS NOT NULL AND profile != ''"
+            ).fetchall()
+            
+            for row in rows:
+                try:
+                    name, text, emb_str = row
+                    emb = json.loads(emb_str)
+                    profiles_with_embeddings.append((name, text, emb))
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning("Failed to decode embedding for %s: %s", row[0], e)
+                    
+        # Calculate cosine similarity
+        results = []
+        
+        # Calculate query magnitude
+        query_mag = math.sqrt(sum(v * v for v in query_embedding))
+        if query_mag == 0:
+            return []
+            
+        for name, text, emb in profiles_with_embeddings:
+            if len(emb) != len(query_embedding):
+                continue
+                
+            dot_product = sum(a * b for a, b in zip(emb, query_embedding))
+            emb_mag = math.sqrt(sum(v * v for v in emb))
+            
+            if emb_mag > 0:
+                similarity = dot_product / (query_mag * emb_mag)
+                results.append((similarity, name, text))
+                
+        # Sort by similarity descending
+        results.sort(key=lambda x: x[0], reverse=True)
+        
+        # Return only the matched names and text (without similarity score)
+        return [(name, text) for _, name, text in results[:limit]]
 
     def get_chat_members(self, chat_id: int) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:

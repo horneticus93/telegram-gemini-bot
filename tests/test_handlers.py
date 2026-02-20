@@ -172,3 +172,34 @@ async def test_no_profile_update_when_save_false():
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
                     mock_update.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_vector_search_rag_injection():
+    """Verify that handle_message generates an embedding and performs vector search."""
+    from bot.handlers import handle_message
+    update = make_update("@testbot Who loves apples?", chat_id=8, first_name="Dave")
+    update.message.from_user.id = 111
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {8}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = ("Alice does!", False)
+            mock_gemini.embed_text.return_value = [0.1, 0.2, 0.3]
+            with patch("bot.handlers.user_memory") as mock_memory:
+                mock_memory.increment_message_count.return_value = 1
+                mock_memory.get_profile.return_value = ""
+                mock_memory.get_chat_members.return_value = ["Alice"]
+                mock_memory.search_profiles_by_embedding.return_value = [("Alice", "Alice loves apples")]
+                
+                await handle_message(update, context)
+                
+                # Verify embedding was generated for the question
+                mock_gemini.embed_text.assert_called_once_with("Who loves apples?")
+                
+                # Verify vector search was performed
+                mock_memory.search_profiles_by_embedding.assert_called_once_with([0.1, 0.2, 0.3], limit=3)
+                
+                # Verify retrieved profile was passed to ask()
+                call_kwargs = mock_gemini.ask.call_args.kwargs
+                retrieved = call_kwargs.get("retrieved_profiles")
+                assert retrieved == ["Alice: Alice loves apples"]
