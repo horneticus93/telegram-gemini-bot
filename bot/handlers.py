@@ -43,12 +43,14 @@ class _LazyGeminiClient:
         question: str,
         user_profile: str = "",
         chat_members: list[str] | None = None,
+        retrieved_profiles: list[str] | None = None,
     ) -> tuple[str, bool]:
         return self._get().ask(
             history=history,
             question=question,
             user_profile=user_profile,
             chat_members=chat_members,
+            retrieved_profiles=retrieved_profiles,
         )
 
     def extract_profile(
