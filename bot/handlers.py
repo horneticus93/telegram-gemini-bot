@@ -52,6 +52,15 @@ class _LazyGeminiClient:
             chat_members=chat_members,
         )
 
+    def extract_profile(
+        self, existing_profile: str, recent_history: str, user_name: str
+    ) -> str:
+        return self._get().extract_profile(
+            existing_profile=existing_profile,
+            recent_history=recent_history,
+            user_name=user_name,
+        )
+
 
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
@@ -62,7 +71,7 @@ async def _update_user_profile(
     try:
         existing_profile = user_memory.get_profile(user_id, chat_id)
         recent_history = session_manager.format_history(chat_id)
-        new_profile = gemini_client._get().extract_profile(
+        new_profile = gemini_client.extract_profile(
             existing_profile=existing_profile,
             recent_history=recent_history,
             user_name=user_name,
