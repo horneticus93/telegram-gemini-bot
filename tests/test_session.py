@@ -4,8 +4,8 @@ from bot.session import SessionManager
 
 def test_add_and_get_single_message():
     sm = SessionManager(max_messages=10)
-    sm.add_message(chat_id=1, role="user", text="Hello")
-    assert sm.get_history(1) == [{"role": "user", "text": "Hello"}]
+    sm.add_message(chat_id=1, role="user", text="Hello", author="Sasha")
+    assert sm.get_history(1) == [{"role": "user", "text": "Hello", "author": "Sasha"}]
 
 
 def test_empty_history_for_unknown_chat():
@@ -20,10 +20,10 @@ def test_rolling_window_drops_oldest():
     sm.add_message(1, "user", "msg3")
     sm.add_message(1, "model", "msg4")  # should push out msg1
     history = sm.get_history(1)
-    assert history == [
-        {"role": "model", "text": "msg2"},
-        {"role": "user", "text": "msg3"},
-        {"role": "model", "text": "msg4"},
+    assert sm.get_history(1) == [
+        {"role": "model", "text": "msg2", "author": None},
+        {"role": "user", "text": "msg3", "author": None},
+        {"role": "model", "text": "msg4", "author": None},
     ]
 
 
@@ -39,10 +39,10 @@ def test_rolling_window_preserves_order():
 
 def test_format_history_joins_with_newlines():
     sm = SessionManager(max_messages=10)
-    sm.add_message(1, "user", "Hi")
-    sm.add_message(1, "model", "Hey")
+    sm.add_message(1, "user", "Hi", author="Sasha")
+    sm.add_message(1, "model", "Hey", author="bot")
     result = sm.format_history(1)
-    assert result == "[user]: Hi\n[bot]: Hey"
+    assert result == "[Sasha]: Hi\n[bot]: Hey"
 
 
 def test_format_history_empty_chat():
@@ -54,5 +54,5 @@ def test_separate_chats_dont_mix():
     sm = SessionManager(max_messages=10)
     sm.add_message(1, "user", "chat1")
     sm.add_message(2, "user", "chat2")
-    assert sm.get_history(1) == [{"role": "user", "text": "chat1"}]
-    assert sm.get_history(2) == [{"role": "user", "text": "chat2"}]
+    assert sm.get_history(1) == [{"role": "user", "text": "chat1", "author": None}]
+    assert sm.get_history(2) == [{"role": "user", "text": "chat2", "author": None}]
