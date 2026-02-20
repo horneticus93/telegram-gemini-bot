@@ -1,6 +1,9 @@
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class UserMemory:
@@ -57,7 +60,7 @@ class UserMemory:
 
     def update_profile(self, user_id: int, chat_id: int, profile: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE user_profiles
                 SET profile = ?, updated_at = ?
@@ -66,6 +69,10 @@ class UserMemory:
                 (profile, datetime.now(timezone.utc).isoformat(), user_id, chat_id),
             )
             conn.commit()
+            if cursor.rowcount == 0:
+                logger.warning(
+                    "update_profile: no row found for user_id=%s chat_id=%s", user_id, chat_id
+                )
 
     def get_chat_members(self, chat_id: int) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:
