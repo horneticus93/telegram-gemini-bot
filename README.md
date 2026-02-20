@@ -7,12 +7,11 @@ A Telegram bot powered by Google Gemini AI with real-time web search and persist
 - **Google Gemini 2.0 / 1.5** — answers questions using a state-of-the-art LLM
 - **Live web search** — uses Gemini's built-in Google Search grounding to find current information
 - **Group chat aware** — reads the last 100 messages for context before answering
+- **RAG Semantic Search** — converts chat history into vector embeddings for deep "brain-like" recall of all users
 - **Short answers** — responds in 3–5 sentences, conversational Telegram style
 - **Private chat support** — responds to every message in a private chat (no tag needed)
-- **Reply trigger** — replies when you reply directly to one of its messages (no @tag needed)
-- **Persistent user memory** — remembers each person's interests, facts, and communication style across restarts
-- **"Remember" trigger** — say `@bot remember that I'm a pilot` to update your profile immediately
-- **Chat member awareness** — knows who is in the chat and personalises responses accordingly
+- **Persistent user memory** — stores member profiles and embeddings in an Alembic-managed SQLite database
+- **Chat member awareness** — knows who is in the chat and answers questions accurately about group members
 - **Web UI** — browse and edit user profiles at `http://your-host:8001` via Datasette
 - **Access control** — only responds in whitelisted group chats
 - **Self-hosted** — runs as Docker containers on your own hardware
@@ -23,7 +22,8 @@ In a **group chat**, the bot silently reads all messages and stores the last 100
 
 In a **private chat**, it responds to every message directly — no tag needed.
 
-**User memory** is built up gradually. After every 10 messages from a person, the bot asks Gemini to update their profile based on recent conversation. The profile (interests, job, facts, communication style) is injected into every response so the bot can personalise answers over time.
+**User Memory & RAG:** After every 10 messages from a person, the bot asks Gemini to update their profile based on recent conversation. It then uses the `gemini-embedding-001` model to calculate a **vector embedding** of this profile and saves it to a persistent SQLite database. 
+When anyone asks a question, the bot calculates the embedding of the question and performs a **Cosine Similarity Search** across the database. It instantly retrieves the 3 most relevant profiles and injects them as hidden background context. This makes the bot essentially an omniscient observer of everyone in the chat, regardless of how many members there are.
 
 ---
 
@@ -68,6 +68,7 @@ Edit `.env` and fill in your values:
 TELEGRAM_BOT_TOKEN=your_token_here
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-1.5-flash
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 ALLOWED_CHAT_IDS=-100123456789
 MAX_HISTORY_MESSAGES=100
 MEMORY_UPDATE_INTERVAL=10
@@ -108,11 +109,12 @@ You should see: `Bot starting, polling for updates...`
 |---|---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Bot token from @BotFather |
 | `GEMINI_API_KEY` | Yes | — | API key from Google AI Studio |
-| `GEMINI_MODEL` | No | `gemini-1.5-flash` | Gemini model to use (see below) |
+| `GEMINI_MODEL` | No | `gemini-1.5-flash` | Gemini generation model to use (see below) |
+| `GEMINI_EMBEDDING_MODEL` | No | `gemini-embedding-001` | Gemini model used for semantic RAG vector embeddings |
 | `ALLOWED_CHAT_IDS` | Yes | — | Comma-separated list of group chat IDs the bot will respond in |
 | `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in context per chat |
 | `MEMORY_UPDATE_INTERVAL` | No | `10` | How many messages between automatic profile updates |
-| `DB_PATH` | No | `/app/data/memory.db` | Path to the SQLite memory database inside the container |
+| `DB_PATH` | No | `/app/data/memory.db` | Path to the Alembic-managed SQLite database |
 
 ### Available Gemini models
 
@@ -210,14 +212,16 @@ docker compose logs -f
 
 ```
 telegram-gemini-bot/
+├── alembic/           # Alembic database migration logic
+├── alembic.ini        # Alembic schema configuration
 ├── bot/
 │   ├── main.py        # Entry point, Telegram bot setup
-│   ├── handlers.py    # Message routing, memory integration
-│   ├── gemini.py      # Gemini API client with search grounding
+│   ├── handlers.py    # Message routing, LLM extraction wrapper
+│   ├── gemini.py      # Gemini API client (Chat & Embeddings)
 │   ├── session.py     # In-memory conversation history
-│   └── memory.py      # Persistent user profiles (SQLite)
+│   └── memory.py      # Persistent Vector DB & SQLite memory
 ├── tests/             # Unit tests (pytest)
-├── Dockerfile         # Bot container
+├── Dockerfile         # Bot container (runs alembic on boot)
 ├── Dockerfile.datasette  # Web UI container
 ├── docker-compose.yml
 └── .env.example
