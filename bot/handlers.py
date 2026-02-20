@@ -48,6 +48,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     user = update.message.from_user
+    if user is None:
+        return
     author = user.first_name or user.username or "Unknown"
     text = update.message.text
 
