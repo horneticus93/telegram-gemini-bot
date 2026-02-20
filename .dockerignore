@@ -8,3 +8,7 @@ docs/
 .env
 *.egg-info/
 dist/
+requirements-dev.txt
+pytest.ini
+.env.example
+.gitignore
