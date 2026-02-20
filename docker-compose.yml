@@ -1,6 +1,8 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env
     volumes:
@@ -10,6 +12,21 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  datasette:
+    build:
+      context: .
+      dockerfile: Dockerfile.datasette
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    volumes:
+      - bot_data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 volumes:
   bot_data:
