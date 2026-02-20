@@ -1,6 +1,6 @@
 # Telegram Gemini Bot
 
-A Telegram bot powered by Google Gemini AI with real-time web search. Designed for small group chats — it silently reads the conversation for context and answers when tagged. Also works in private chats without any tag.
+A Telegram bot powered by Google Gemini AI with real-time web search and persistent user memory. Designed for small group chats — it silently reads the conversation for context, remembers each person over time, and answers when tagged. Also works in private chats without any tag.
 
 ## Features
 
@@ -9,14 +9,21 @@ A Telegram bot powered by Google Gemini AI with real-time web search. Designed f
 - **Group chat aware** — reads the last 100 messages for context before answering
 - **Short answers** — responds in 3–5 sentences, conversational Telegram style
 - **Private chat support** — responds to every message in a private chat (no tag needed)
+- **Reply trigger** — replies when you reply directly to one of its messages (no @tag needed)
+- **Persistent user memory** — remembers each person's interests, facts, and communication style across restarts
+- **"Remember" trigger** — say `@bot remember that I'm a pilot` to update your profile immediately
+- **Chat member awareness** — knows who is in the chat and personalises responses accordingly
+- **Web UI** — browse and edit user profiles at `http://your-host:8001` via Datasette
 - **Access control** — only responds in whitelisted group chats
-- **Self-hosted** — runs as a Docker container on your own hardware (tested on Synology DS224+)
+- **Self-hosted** — runs as Docker containers on your own hardware
 
 ## How It Works
 
 In a **group chat**, the bot silently reads all messages and stores the last 100 as context. When someone tags it (`@botname your question`), it sends the full conversation history to Gemini along with the question and replies in the group.
 
 In a **private chat**, it responds to every message directly — no tag needed.
+
+**User memory** is built up gradually. After every 10 messages from a person, the bot asks Gemini to update their profile based on recent conversation. The profile (interests, job, facts, communication style) is injected into every response so the bot can personalise answers over time.
 
 ---
 
@@ -63,6 +70,8 @@ GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-1.5-flash
 ALLOWED_CHAT_IDS=-100123456789
 MAX_HISTORY_MESSAGES=100
+MEMORY_UPDATE_INTERVAL=10
+DB_PATH=/app/data/memory.db
 ```
 
 See [Configuration](#configuration) below for details on each variable.
@@ -101,7 +110,9 @@ You should see: `Bot starting, polling for updates...`
 | `GEMINI_API_KEY` | Yes | — | API key from Google AI Studio |
 | `GEMINI_MODEL` | No | `gemini-1.5-flash` | Gemini model to use (see below) |
 | `ALLOWED_CHAT_IDS` | Yes | — | Comma-separated list of group chat IDs the bot will respond in |
-| `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in memory per chat |
+| `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in context per chat |
+| `MEMORY_UPDATE_INTERVAL` | No | `10` | How many messages between automatic profile updates |
+| `DB_PATH` | No | `/app/data/memory.db` | Path to the SQLite memory database inside the container |
 
 ### Available Gemini models
 
@@ -122,12 +133,31 @@ To switch models, edit `GEMINI_MODEL` in `.env` and restart the bot — no rebui
 @yourbot what's the current bitcoin price?
 @yourbot who won the latest Champions League?
 @yourbot what do you think about this?   ← bot uses conversation context
+@yourbot remember that I'm a vegetarian  ← updates your profile immediately
 ```
 
 **In a private chat:**
 ```
 What's the weather like in Kyiv today?
 Explain quantum computing in simple terms
+```
+
+---
+
+## User Memory
+
+The bot builds a persistent profile for each person in each chat. Profiles are stored in a SQLite database and survive container restarts.
+
+- **Automatic updates** — after every `MEMORY_UPDATE_INTERVAL` messages, the bot updates the profile in the background
+- **Immediate update** — say `remember`, `запам'ятай`, or `запомни` to trigger an update right away
+- **Injected into responses** — the profile and list of known chat members are included in every Gemini request
+
+### Web UI
+
+A Datasette instance runs alongside the bot and lets you browse and edit profiles in your browser:
+
+```
+http://your-host:8001
 ```
 
 ---
@@ -151,23 +181,6 @@ docker compose down && docker compose up -d --build
 # View live logs
 docker compose logs -f
 ```
-
----
-
-## Deploying on Synology NAS
-
-1. SSH into your NAS
-2. Clone the repo into a folder (e.g. `~/app/horneticus93/`):
-   ```bash
-   git clone https://github.com/horneticus93/telegram-gemini-bot.git
-   ```
-3. Create and fill in `.env` as described above
-4. Start the bot:
-   ```bash
-   sudo docker compose up -d
-   ```
-
-The container is configured with `restart: unless-stopped`, so it will automatically start again after a NAS reboot or a crash.
 
 ---
 
@@ -199,11 +212,13 @@ The container is configured with `restart: unless-stopped`, so it will automatic
 telegram-gemini-bot/
 ├── bot/
 │   ├── main.py        # Entry point, Telegram bot setup
-│   ├── handlers.py    # Message routing and access control
+│   ├── handlers.py    # Message routing, memory integration
 │   ├── gemini.py      # Gemini API client with search grounding
-│   └── session.py     # In-memory conversation history
+│   ├── session.py     # In-memory conversation history
+│   └── memory.py      # Persistent user profiles (SQLite)
 ├── tests/             # Unit tests (pytest)
-├── Dockerfile
+├── Dockerfile         # Bot container
+├── Dockerfile.datasette  # Web UI container
 ├── docker-compose.yml
 └── .env.example
 ```
