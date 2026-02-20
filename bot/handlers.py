@@ -1,9 +1,11 @@
 import os
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 from .session import SessionManager
 from .gemini import GeminiClient
+from .memory import UserMemory
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +15,13 @@ ALLOWED_CHAT_IDS: set[int] = {
     if cid.strip()
 }
 
+MEMORY_UPDATE_INTERVAL = int(os.getenv("MEMORY_UPDATE_INTERVAL", "10"))
+REMEMBER_TRIGGERS = {"remember", "запам'ятай", "запомни"}
+
 session_manager = SessionManager(
     max_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
 )
+user_memory = UserMemory(db_path=os.getenv("DB_PATH", "/app/data/memory.db"))
 
 
 class _LazyGeminiClient:
@@ -32,11 +38,39 @@ class _LazyGeminiClient:
             self._client = GeminiClient(api_key=os.getenv("GEMINI_API_KEY", ""))
         return self._client
 
-    def ask(self, history: str, question: str) -> str:
-        return self._get().ask(history=history, question=question)
+    def ask(
+        self,
+        history: str,
+        question: str,
+        user_profile: str = "",
+        chat_members: list[str] | None = None,
+    ) -> str:
+        return self._get().ask(
+            history=history,
+            question=question,
+            user_profile=user_profile,
+            chat_members=chat_members,
+        )
 
 
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
+
+
+async def _update_user_profile(
+    user_id: int, chat_id: int, user_name: str
+) -> None:
+    try:
+        existing_profile = user_memory.get_profile(user_id, chat_id)
+        recent_history = session_manager.format_history(chat_id)
+        new_profile = gemini_client._get().extract_profile(
+            existing_profile=existing_profile,
+            recent_history=recent_history,
+            user_name=user_name,
+        )
+        user_memory.update_profile(user_id, chat_id, new_profile)
+        logger.info("Updated memory profile for user %s (%s)", user_id, user_name)
+    except Exception:
+        logger.exception("Failed to update profile for user %s", user_id)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -55,6 +89,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     session_manager.add_message(chat_id, author, text)
 
+    msg_count = user_memory.increment_message_count(
+        user_id=user.id,
+        chat_id=chat_id,
+        username=user.username or "",
+        first_name=author,
+    )
+    if msg_count % MEMORY_UPDATE_INTERVAL == 0:
+        asyncio.create_task(_update_user_profile(user.id, chat_id, author))
+
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
     is_reply_to_bot = (
@@ -66,10 +109,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     question = text.replace(f"@{bot_username}", "").strip() or text
+
+    is_remember_request = any(kw in text.lower() for kw in REMEMBER_TRIGGERS)
+    if is_remember_request:
+        await _update_user_profile(user.id, chat_id, author)
+
     history = session_manager.format_history(chat_id)
+    user_profile = user_memory.get_profile(user.id, chat_id)
+    chat_members = user_memory.get_chat_members(chat_id)
 
     try:
-        response = gemini_client.ask(history=history, question=question)
+        response = gemini_client.ask(
+            history=history,
+            question=question,
+            user_profile=user_profile,
+            chat_members=chat_members,
+        )
         if len(response) <= 4096:
             await update.message.reply_text(response)
         else:
