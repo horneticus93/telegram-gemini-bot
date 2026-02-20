@@ -366,6 +366,8 @@ source .venv/bin/activate && pytest -v
 
 Expected: All 28 tests PASS (8 memory + 8 gemini + 5 handlers + 7 session).
 
+Note: handler tests will grow to 8 in Task 3.
+
 **Step 5: Commit**
 
 ```bash
@@ -381,7 +383,7 @@ git commit -m "feat: inject user profile and chat members into Gemini prompt"
 - Modify: `bot/handlers.py`
 - Modify: `tests/test_handlers.py`
 
-**Step 1: Add 2 new tests to `tests/test_handlers.py`** — append after the existing 5 tests:
+**Step 1: Add 3 new tests to `tests/test_handlers.py`** — append after the existing 5 tests:
 
 ```python
 @pytest.mark.asyncio
@@ -414,12 +416,28 @@ async def test_passes_user_profile_to_gemini():
     call_kwargs = mock_gemini.ask.call_args.kwargs
     profile = call_kwargs.get("user_profile") or ""
     assert "Bob is a chef." in profile
+
+
+@pytest.mark.asyncio
+async def test_remember_keyword_triggers_immediate_profile_update():
+    from bot.handlers import handle_message
+    update = make_update("@testbot remember that I am a pilot", chat_id=6, first_name="Eve")
+    update.message.from_user.id = 77
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {6}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = "Got it, I'll remember that!"
+            with patch("bot.handlers._update_user_profile") as mock_update:
+                mock_update.return_value = None
+                await handle_message(update, context)
+                mock_update.assert_awaited_once()
 ```
 
 **Step 2: Run new tests to verify they fail**
 
 ```bash
-source .venv/bin/activate && pytest tests/test_handlers.py -v -k "memory or profile"
+source .venv/bin/activate && pytest tests/test_handlers.py -v -k "memory or profile or remember"
 ```
 
 Expected: FAIL
@@ -445,6 +463,7 @@ ALLOWED_CHAT_IDS: set[int] = {
 }
 
 MEMORY_UPDATE_INTERVAL = int(os.getenv("MEMORY_UPDATE_INTERVAL", "10"))
+REMEMBER_TRIGGERS = {"remember", "запам'ятай", "запомни"}
 
 session_manager = SessionManager(
     max_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
@@ -537,6 +556,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     question = text.replace(f"@{bot_username}", "").strip() or text
+
+    is_remember_request = any(kw in text.lower() for kw in REMEMBER_TRIGGERS)
+    if is_remember_request:
+        await _update_user_profile(user.id, chat_id, author)
+
     history = session_manager.format_history(chat_id)
     user_profile = user_memory.get_profile(user.id, chat_id)
     chat_members = user_memory.get_chat_members(chat_id)
@@ -566,13 +590,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 source .venv/bin/activate && pytest -v
 ```
 
-Expected: All 30 tests PASS.
+Expected: All 31 tests PASS (8 memory + 8 gemini + 8 handlers + 7 session).
 
 **Step 5: Commit**
 
 ```bash
 git add bot/handlers.py tests/test_handlers.py
-git commit -m "feat: wire user memory and chat members into message handler"
+git commit -m "feat: wire user memory, chat members, and remember trigger into handler"
 ```
 
 ---
@@ -629,7 +653,7 @@ data/
 source .venv/bin/activate && pytest -v
 ```
 
-Expected: All 30 tests PASS.
+Expected: All 31 tests PASS.
 
 **Step 5: Commit**
 
@@ -692,7 +716,7 @@ for row in conn.execute('SELECT first_name, chat_id, profile, msg_count FROM use
 
 ---
 
-## Full expected test suite (30 tests)
+## Full expected test suite (31 tests)
 
 ```
 tests/test_memory.py::test_first_message_count_is_one                    PASSED
@@ -718,6 +742,7 @@ tests/test_handlers.py::test_replies_with_error_on_gemini_failure        PASSED
 tests/test_handlers.py::test_strips_bot_mention_from_question            PASSED
 tests/test_handlers.py::test_increments_user_message_count               PASSED
 tests/test_handlers.py::test_passes_user_profile_to_gemini               PASSED
+tests/test_handlers.py::test_remember_keyword_triggers_immediate_profile_update PASSED
 tests/test_session.py::test_add_and_get_single_message                   PASSED
 tests/test_session.py::test_empty_history_for_unknown_chat               PASSED
 tests/test_session.py::test_rolling_window_drops_oldest                  PASSED
@@ -726,5 +751,5 @@ tests/test_session.py::test_format_history_joins_with_newlines           PASSED
 tests/test_session.py::test_format_history_empty_chat                    PASSED
 tests/test_session.py::test_separate_chats_dont_mix                      PASSED
 
-30 passed
+31 passed
 ```
