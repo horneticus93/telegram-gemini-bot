@@ -55,8 +55,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     session_manager.add_message(chat_id, author, text)
 
+    is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
-    if f"@{bot_username}" not in text:
+    if not is_private and f"@{bot_username}" not in text:
         return
 
     question = text.replace(f"@{bot_username}", "").strip() or text
