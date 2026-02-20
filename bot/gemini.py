@@ -25,6 +25,7 @@ class GeminiClient:
     def __init__(self, api_key: str):
         self._client = genai.Client(api_key=api_key)
         self._model = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+        self._embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
 
     def ask(
         self,
@@ -142,8 +143,8 @@ class GeminiClient:
             return []
         
         response = self._client.models.embed_content(
-            model="text-embedding-004",
-            contents=text,
+            model=self._embedding_model,
+            contents=[text],
         )
         return response.embeddings[0].values
 
