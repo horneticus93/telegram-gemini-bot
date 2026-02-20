@@ -21,11 +21,21 @@ class GeminiClient:
 
     def ask(
         self,
-        history: str,
+        history: list[dict],
         question: str,
         user_profile: str = "",
         chat_members: list[str] | None = None,
     ) -> str:
+        """Send a question to Gemini with full multi-turn conversation history.
+
+        Args:
+            history: List of ``{"role": "user"|"model", "text": str}`` dicts
+                     from ``SessionManager.get_history()``. Does NOT include
+                     the current ``question`` — that is appended automatically.
+            question: The current user message (already stripped of bot mention).
+            user_profile: Optional profile text injected as context.
+            chat_members: Optional list of known chat member names.
+        """
         context_parts = []
         if user_profile:
             context_parts.append(f"Profile of the person asking:\n{user_profile}")
@@ -33,20 +43,41 @@ class GeminiClient:
             context_parts.append(
                 f"Known members in this chat: {', '.join(chat_members)}"
             )
-        context_block = ("\n\n" + "\n\n".join(context_parts)) if context_parts else ""
+        context_prefix = "\n\n".join(context_parts)
 
-        if history:
-            contents = (
-                f"Here is the recent group conversation:\n\n{history}"
-                f"{context_block}"
-                f"\n\nNow answer this: {question}"
+        # Build the structured contents list from history turns.
+        contents: list[types.Content] = []
+        for i, entry in enumerate(history):
+            text = entry["text"]
+            # Prepend context to the very first user turn so the model sees it
+            # before any history, without creating an extra artificial turn.
+            if i == 0 and context_prefix and entry["role"] == "user":
+                text = f"{context_prefix}\n\n{text}"
+            contents.append(
+                types.Content(
+                    role=entry["role"],
+                    parts=[types.Part(text=text)],
+                )
             )
-        else:
-            contents = (
-                f"{context_block.strip()}\n\n{question}".strip()
-                if context_block
-                else question
+
+        # If context exists but history is empty (or starts with a model turn),
+        # inject it as a leading user message so it still reaches the model.
+        if context_prefix and (not contents or contents[0].role != "user"):
+            contents.insert(
+                0,
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=context_prefix)],
+                ),
             )
+
+        # Append the current question as the final user turn.
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part(text=question)],
+            )
+        )
 
         response = self._client.models.generate_content(
             model=self._model,
@@ -60,6 +91,7 @@ class GeminiClient:
         if text is None:
             raise ValueError("Gemini returned no text response")
         return text
+
 
     def detect_remember_intent(self, message: str) -> bool:
         """Return True if the user is asking to save / remember some information."""
