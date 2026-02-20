@@ -57,7 +57,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
-    if not is_private and f"@{bot_username}" not in text:
+    is_reply_to_bot = (
+        update.message.reply_to_message is not None
+        and update.message.reply_to_message.from_user is not None
+        and update.message.reply_to_message.from_user.username == bot_username
+    )
+    if not is_private and not is_reply_to_bot and f"@{bot_username}" not in text:
         return
 
     question = text.replace(f"@{bot_username}", "").strip() or text
