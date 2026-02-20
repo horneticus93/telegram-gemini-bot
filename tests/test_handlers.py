@@ -51,7 +51,7 @@ async def test_stores_message_without_tag():
 
     update.message.reply_text.assert_not_called()
     history = session_manager.get_history(1)
-    assert any("just chatting" in msg for msg in history)
+    assert any("just chatting" in msg["text"] for msg in history)
 
 
 @pytest.mark.asyncio
@@ -144,6 +144,7 @@ async def test_remember_keyword_triggers_immediate_profile_update():
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {6}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
             mock_gemini.ask.return_value = "Got it, I'll remember that!"
+            mock_gemini.detect_remember_intent.return_value = True
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""

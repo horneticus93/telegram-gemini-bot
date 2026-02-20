@@ -51,6 +51,9 @@ class _LazyGeminiClient:
             chat_members=chat_members,
         )
 
+    def detect_remember_intent(self, message: str) -> bool:
+        return self._get().detect_remember_intent(message)
+
     def extract_profile(
         self, existing_profile: str, recent_history: str, user_name: str
     ) -> str:
@@ -95,7 +98,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     author = user.first_name or user.username or "Unknown"
     text = update.message.text
 
-    session_manager.add_message(chat_id, author, text)
+    session_manager.add_message(chat_id, "user", text)
 
     msg_count = user_memory.increment_message_count(
         user_id=user.id,
@@ -131,7 +134,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if is_remember_request:
         await _update_user_profile(user.id, chat_id, author)
 
-    history = session_manager.format_history(chat_id)
+    history = session_manager.get_history(chat_id)
     user_profile = user_memory.get_profile(user.id)
     chat_members = user_memory.get_chat_members(chat_id)
 
@@ -142,6 +145,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             user_profile=user_profile,
             chat_members=chat_members,
         )
+        session_manager.add_message(chat_id, "model", response)
         if len(response) <= 4096:
             await update.message.reply_text(response)
         else:
