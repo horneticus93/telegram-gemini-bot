@@ -41,39 +41,54 @@ class UserMemory:
         if not cols or "chat_id" not in cols:
             return  # fresh install or already migrated
         logger.info("Migrating user_profiles to per-user schema")
-        conn.execute("""
-            CREATE TABLE user_profiles_new (
-                user_id    INTEGER PRIMARY KEY,
-                username   TEXT,
-                first_name TEXT,
-                profile    TEXT    DEFAULT '',
-                msg_count  INTEGER DEFAULT 0,
-                updated_at TEXT
-            )
-        """)
-        conn.execute("""
-            INSERT INTO user_profiles_new (user_id, username, first_name, profile, msg_count)
-            SELECT user_id, username, first_name,
-                   MAX(COALESCE(profile, '')),
-                   SUM(msg_count)
-            FROM user_profiles
-            GROUP BY user_id
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chat_memberships (
-                user_id INTEGER,
-                chat_id INTEGER,
-                PRIMARY KEY (user_id, chat_id)
-            )
-        """)
-        conn.execute("""
-            INSERT OR IGNORE INTO chat_memberships (user_id, chat_id)
-            SELECT DISTINCT user_id, chat_id FROM user_profiles
-        """)
-        conn.execute("DROP TABLE user_profiles")
-        conn.execute("ALTER TABLE user_profiles_new RENAME TO user_profiles")
-        conn.commit()
-        logger.info("Migration complete")
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+            conn.execute("""
+                CREATE TABLE user_profiles_new (
+                    user_id    INTEGER PRIMARY KEY,
+                    username   TEXT,
+                    first_name TEXT,
+                    profile    TEXT    DEFAULT '',
+                    msg_count  INTEGER DEFAULT 0,
+                    updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO user_profiles_new (user_id, username, first_name, profile, msg_count)
+                SELECT main.user_id,
+                       MAX(main.username),
+                       MAX(main.first_name),
+                       COALESCE(
+                           (SELECT sub.profile FROM user_profiles sub
+                            WHERE sub.user_id = main.user_id
+                              AND sub.profile IS NOT NULL AND sub.profile != ''
+                            ORDER BY sub.updated_at DESC
+                            LIMIT 1),
+                           ''
+                       ),
+                       SUM(main.msg_count)
+                FROM user_profiles main
+                GROUP BY main.user_id
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_memberships (
+                    user_id INTEGER,
+                    chat_id INTEGER,
+                    PRIMARY KEY (user_id, chat_id)
+                )
+            """)
+            conn.execute("""
+                INSERT OR IGNORE INTO chat_memberships (user_id, chat_id)
+                SELECT DISTINCT user_id, chat_id FROM user_profiles
+            """)
+            conn.execute("DROP TABLE user_profiles")
+            conn.execute("ALTER TABLE user_profiles_new RENAME TO user_profiles")
+            conn.commit()
+            logger.info("Migration complete")
+        except Exception:
+            conn.rollback()
+            logger.exception("Migration failed \u2014 rolled back")
+            raise
 
     def increment_message_count(
         self, user_id: int, chat_id: int, username: str, first_name: str
