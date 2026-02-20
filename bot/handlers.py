@@ -96,7 +96,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         first_name=author,
     )
     if msg_count % MEMORY_UPDATE_INTERVAL == 0:
-        asyncio.create_task(_update_user_profile(user.id, chat_id, author))
+        task = asyncio.create_task(_update_user_profile(user.id, chat_id, author))
+        task.add_done_callback(
+            lambda t: logger.error("Unhandled error in background profile update: %s", t.exception())
+            if not t.cancelled() and t.exception() is not None
+            else None
+        )
 
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
