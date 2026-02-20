@@ -1,3 +1,4 @@
+import os
 from google import genai
 from google.genai import types
 
@@ -13,7 +14,7 @@ SYSTEM_PROMPT = (
 class GeminiClient:
     def __init__(self, api_key: str):
         self._client = genai.Client(api_key=api_key)
-        self._model = "gemini-2.0-flash"
+        self._model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
     def ask(self, history: str, question: str) -> str:
         if history:
