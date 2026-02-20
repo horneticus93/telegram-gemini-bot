@@ -60,6 +60,8 @@ class _LazyGeminiClient:
             user_name=user_name,
         )
 
+    def embed_text(self, text: str) -> list[float]:
+        return self._get().embed_text(text)
 
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
@@ -75,7 +77,8 @@ async def _update_user_profile(
             recent_history=recent_history,
             user_name=user_name,
         )
-        user_memory.update_profile(user_id, new_profile)
+        new_embedding = gemini_client.embed_text(new_profile) if new_profile else None
+        user_memory.update_profile(user_id, new_profile, embedding=new_embedding)
         logger.info("Updated memory profile for user %s (%s)", user_id, user_name)
     except Exception:
         logger.exception("Failed to update profile for user %s", user_id)
@@ -128,11 +131,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_members = user_memory.get_chat_members(chat_id)
 
     try:
+        # Perform Vector Search for RAG
+        query_embedding = gemini_client.embed_text(question)
+        search_results = user_memory.search_profiles_by_embedding(query_embedding, limit=3)
+        retrieved_profiles = [f"{name}: {prof}" for name, prof in search_results] if search_results else None
+
         response, save_to_profile = gemini_client.ask(
             history=history,
             question=question,
             user_profile=user_profile,
             chat_members=chat_members,
+            retrieved_profiles=retrieved_profiles,
         )
         session_manager.add_message(chat_id, "model", response)
 

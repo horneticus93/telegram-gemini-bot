@@ -1,10 +1,18 @@
 import pytest
 from bot.memory import UserMemory
-
+from alembic.config import Config
+from alembic import command
 
 @pytest.fixture
 def mem(tmp_path):
-    return UserMemory(db_path=str(tmp_path / "test.db"))
+    db_path = str(tmp_path / "test.db")
+    
+    # Run alembic migrations specifically on this temporary DB
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(alembic_cfg, "head")
+    
+    return UserMemory(db_path=db_path)
 
 
 def test_first_message_count_is_one(mem):
@@ -59,3 +67,33 @@ def test_get_chat_members_returns_known_first_names(mem):
 
 def test_get_chat_members_empty_chat_returns_empty(mem):
     assert mem.get_chat_members(chat_id=999) == []
+
+
+def test_search_profiles_by_embedding(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.increment_message_count(2, 100, "bob", "Bob")
+    mem.increment_message_count(3, 100, "charlie", "Charlie")
+    
+    # Vectors to simulate semantic meaning
+    # Alice is [1.0, 0.0] -> matches query [0.9, 0.1]
+    # Bob is [0.0, 1.0] -> orthogonal
+    # Charlie is [-1.0, 0.0] -> opposite
+    mem.update_profile(1, "Alice likes apples", embedding=[1.0, 0.0])
+    mem.update_profile(2, "Bob likes bananas", embedding=[0.0, 1.0])
+    mem.update_profile(3, "Charlie likes cats", embedding=[-1.0, 0.0])
+    
+    # Query somewhat similar to Alice
+    results = mem.search_profiles_by_embedding([0.9, 0.1], limit=2)
+    assert len(results) == 2
+    assert results[0][0] == "Alice"
+    assert results[1][0] == "Bob"
+
+def test_search_profiles_by_embedding_empty_or_invalid(mem):
+    # No profiles with embeddings yet
+    assert mem.search_profiles_by_embedding([1.0, 0.0]) == []
+    
+    # Add profile without embedding
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.update_profile(1, "Alice is here", embedding=None)
+    
+    assert mem.search_profiles_by_embedding([1.0, 0.0]) == []

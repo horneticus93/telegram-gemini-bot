@@ -32,6 +32,7 @@ class GeminiClient:
         question: str,
         user_profile: str = "",
         chat_members: list[str] | None = None,
+        retrieved_profiles: list[str] | None = None,
     ) -> tuple[str, bool]:
         """Send a question to Gemini with full multi-turn conversation history.
 
@@ -46,6 +47,7 @@ class GeminiClient:
             question: The current user message (already stripped of bot mention).
             user_profile: Optional profile text injected as context.
             chat_members: Optional list of known chat member names.
+            retrieved_profiles: Optional list of profile strings retrieved via vector search.
         """
         context_parts = []
         if user_profile:
@@ -53,6 +55,11 @@ class GeminiClient:
         if chat_members:
             context_parts.append(
                 f"Known members in this chat: {', '.join(chat_members)}"
+            )
+        if retrieved_profiles:
+            profiles_text = "\n".join(f"- {p}" for p in retrieved_profiles)
+            context_parts.append(
+                f"Knowledge base (facts about chat members):\n{profiles_text}"
             )
         context_prefix = "\n\n".join(context_parts)
 
@@ -128,6 +135,17 @@ class GeminiClient:
         if text is None:
             return existing_profile
         return text.strip()
+
+    def embed_text(self, text: str) -> list[float]:
+        """Generate an embedding vector for the given text."""
+        if not text:
+            return []
+        
+        response = self._client.models.embed_content(
+            model="text-embedding-004",
+            contents=text,
+        )
+        return response.embeddings[0].values
 
 
 def _parse_bot_response(raw: str) -> tuple[str, bool]:
