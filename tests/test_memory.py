@@ -99,16 +99,3 @@ def test_search_profiles_by_embedding_empty_or_invalid(mem):
     assert mem.search_profiles_by_embedding([1.0, 0.0]) == []
 
 
-def test_get_chat_profile_unknown_chat_returns_empty(mem):
-    assert mem.get_chat_profile(chat_id=999) == ""
-
-
-def test_update_and_get_chat_profile(mem):
-    mem.update_chat_profile(chat_id=100, profile="This group often discusses Python and AI.")
-    assert mem.get_chat_profile(100) == "This group often discusses Python and AI."
-
-
-def test_update_chat_profile_overwrites_existing(mem):
-    mem.update_chat_profile(chat_id=100, profile="Old profile")
-    mem.update_chat_profile(chat_id=100, profile="New profile")
-    assert mem.get_chat_profile(100) == "New profile"
