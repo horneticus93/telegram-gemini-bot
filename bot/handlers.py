@@ -132,19 +132,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_profile = user_memory.get_profile(user.id)
     chat_members = user_memory.get_chat_members(chat_id)
 
+    async def send_typing():
+        while True:
+            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+            await asyncio.sleep(5)
+
+    typing_task = asyncio.create_task(send_typing())
+
     try:
         # Perform Vector Search for RAG
-        query_embedding = gemini_client.embed_text(question)
+        query_embedding = await asyncio.to_thread(gemini_client.embed_text, question)
         search_results = user_memory.search_profiles_by_embedding(query_embedding, limit=3)
         retrieved_profiles = [f"{name}: {prof}" for name, prof in search_results] if search_results else None
 
-        response, save_to_profile = gemini_client.ask(
+        response, save_to_profile = await asyncio.to_thread(
+            gemini_client.ask,
             history=history,
             question=question,
             user_profile=user_profile,
             chat_members=chat_members,
             retrieved_profiles=retrieved_profiles,
         )
+        typing_task.cancel()
         session_manager.add_message(chat_id, "model", response, author=bot_username or "bot")
 
         if save_to_profile:
@@ -157,6 +166,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for i in range(0, len(response), 4096):
                 await update.message.reply_text(response[i : i + 4096])
     except Exception:
+        typing_task.cancel()
         logger.exception("Gemini API call failed")
         await update.message.reply_text(
             "Sorry, something went wrong. Try again."
