@@ -6,29 +6,33 @@ from bot.gemini import GeminiClient, _parse_bot_response
 # --- _parse_bot_response unit tests ---
 
 def test_parse_valid_json():
-    answer, save = _parse_bot_response('{"answer": "Hello!", "save_to_profile": false}')
+    answer, save, save_memory = _parse_bot_response('{"answer": "Hello!", "save_to_profile": false, "save_to_memory": false}')
     assert answer == "Hello!"
     assert save is False
+    assert save_memory is False
 
 
 def test_parse_save_true():
-    answer, save = _parse_bot_response('{"answer": "Got it.", "save_to_profile": true}')
+    answer, save, save_memory = _parse_bot_response('{"answer": "Got it.", "save_to_profile": true, "save_to_memory": true}')
     assert answer == "Got it."
     assert save is True
+    assert save_memory is True
 
 
 def test_parse_strips_markdown_fences():
-    raw = '```json\n{"answer": "Hi", "save_to_profile": false}\n```'
-    answer, save = _parse_bot_response(raw)
+    raw = '```json\n{"answer": "Hi", "save_to_profile": false, "save_to_memory": false}\n```'
+    answer, save, save_memory = _parse_bot_response(raw)
     assert answer == "Hi"
     assert save is False
+    assert save_memory is False
 
 
 def test_parse_fallback_on_invalid_json():
     raw = "Sorry, I couldn't understand that."
-    answer, save = _parse_bot_response(raw)
+    answer, save, save_memory = _parse_bot_response(raw)
     assert answer == raw
     assert save is False
+    assert save_memory is False
 
 
 # --- GeminiClient.ask() tests ---
@@ -38,14 +42,15 @@ def test_ask_calls_generate_content(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Paris is the capital of France.", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Paris is the capital of France.", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
-    answer, save = client.ask(history=[], question="What's the capital of France?")
+    answer, save, save_memory = client.ask(history=[], question="What's the capital of France?")
 
     assert answer == "Paris is the capital of France."
     assert save is False
+    assert save_memory is False
     mock_client.models.generate_content.assert_called_once()
 
 
@@ -54,7 +59,7 @@ def test_ask_includes_history_in_prompt(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Some answer", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Some answer", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
@@ -75,13 +80,15 @@ def test_ask_with_empty_history(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Hello!", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Hello!", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
-    answer, save = client.ask(history=[], question="Say hello")
+    answer, save, save_memory = client.ask(history=[], question="Say hello")
 
     assert answer == "Hello!"
+    assert save is False
+    assert save_memory is False
     call_kwargs = mock_client.models.generate_content.call_args
     contents = call_kwargs.kwargs["contents"]
     assert len(contents) == 1
@@ -106,7 +113,7 @@ def test_ask_includes_user_profile_in_prompt(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Answer", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
@@ -123,7 +130,7 @@ def test_ask_without_profile_omits_profile_section(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Answer", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
@@ -141,7 +148,7 @@ def test_ask_includes_chat_members_in_prompt(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Answer", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
@@ -155,11 +162,45 @@ def test_ask_includes_chat_members_in_prompt(mock_client_cls):
 
 
 @patch("bot.gemini.genai.Client")
+def test_ask_includes_chat_profile_in_prompt(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false, "save_to_memory": false}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history=[], question="What is this group about?", chat_profile="This group likes open source projects.")
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    all_texts = " ".join(part.text for c in contents for part in c.parts)
+    assert "This group likes open source projects." in all_texts
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_without_chat_profile_omits_chat_section(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history=[], question="Hello", chat_profile="")
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    all_texts = " ".join(part.text for c in contents for part in c.parts)
+    assert "Profile of this chat/group:" not in all_texts
+
+
+@patch("bot.gemini.genai.Client")
 def test_ask_history_roles_are_preserved(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Sure!", "save_to_profile": false}'
+    mock_response.text = '{"answer": "Sure!", "save_to_profile": false, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
@@ -182,14 +223,31 @@ def test_ask_save_to_profile_true(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
     mock_response = MagicMock()
-    mock_response.text = '{"answer": "Got it, noted!", "save_to_profile": true}'
+    mock_response.text = '{"answer": "Got it, noted!", "save_to_profile": true, "save_to_memory": false}'
     mock_client.models.generate_content.return_value = mock_response
 
     client = GeminiClient(api_key="fake-key")
-    answer, save = client.ask(history=[], question="Remember that I am a pilot")
+    answer, save, save_memory = client.ask(history=[], question="Remember that I am a pilot")
 
     assert answer == "Got it, noted!"
     assert save is True
+    assert save_memory is False
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_save_to_memory_true(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"answer": "Saved for chat memory.", "save_to_profile": false, "save_to_memory": true}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    answer, save, save_memory = client.ask(history=[], question="Remember this for the whole group")
+
+    assert answer == "Saved for chat memory."
+    assert save is False
+    assert save_memory is True
 
 
 @patch("bot.gemini.genai.Client")
@@ -207,4 +265,22 @@ def test_extract_profile_returns_text(mock_client_cls):
         user_name="Alice",
     )
     assert result == "Alice is a nurse who likes hiking."
+    mock_client.models.generate_content.assert_called_once()
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_chat_profile_returns_text(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "This group usually discusses Python tooling and release automation."
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_chat_profile(
+        existing_profile="",
+        recent_history="[Alice]: let's deploy",
+        chat_name="Core Team",
+    )
+    assert result == "This group usually discusses Python tooling and release automation."
     mock_client.models.generate_content.assert_called_once()

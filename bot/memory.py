@@ -65,6 +65,32 @@ class UserMemory:
             if cursor.rowcount == 0:
                 logger.warning("update_profile: no row found for user_id=%s", user_id)
 
+    def get_chat_profile(self, chat_id: int) -> str:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT profile FROM chat_profiles WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            return row[0] if row and row[0] else ""
+
+    def update_chat_profile(
+        self, chat_id: int, profile: str, embedding: list[float] | None = None
+    ) -> None:
+        emb_json = json.dumps(embedding) if embedding else None
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_profiles (chat_id, profile, profile_embedding, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    profile = excluded.profile,
+                    profile_embedding = excluded.profile_embedding,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, profile, emb_json, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+
     def search_profiles_by_embedding(self, query_embedding: list[float], limit: int = 5) -> list[tuple[int, str, str]]:
         """Search across all user profiles and return the top `limit` matches based on cosine similarity.
 
@@ -128,3 +154,48 @@ class UserMemory:
                 (chat_id,),
             ).fetchall()
             return [(row[0], row[1]) for row in rows]
+
+    def search_chat_profiles_by_embedding(
+        self, query_embedding: list[float], limit: int = 5
+    ) -> list[tuple[int, str]]:
+        """Search chat profiles and return top `limit` matches by cosine similarity.
+
+        Returns:
+            List of (chat_id, profile) tuples.
+        """
+        if not query_embedding:
+            return []
+
+        profiles_with_embeddings = []
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT chat_id, profile, profile_embedding FROM chat_profiles "
+                "WHERE profile_embedding IS NOT NULL AND profile != ''"
+            ).fetchall()
+
+            for row in rows:
+                try:
+                    chat_id, text, emb_str = row
+                    emb = json.loads(emb_str)
+                    profiles_with_embeddings.append((chat_id, text, emb))
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning("Failed to decode chat embedding for %s: %s", row[0], e)
+
+        query_mag = math.sqrt(sum(v * v for v in query_embedding))
+        if query_mag == 0:
+            return []
+
+        results = []
+        for chat_id, text, emb in profiles_with_embeddings:
+            if len(emb) != len(query_embedding):
+                continue
+
+            dot_product = sum(a * b for a, b in zip(emb, query_embedding))
+            emb_mag = math.sqrt(sum(v * v for v in emb))
+
+            if emb_mag > 0:
+                similarity = dot_product / (query_mag * emb_mag)
+                results.append((similarity, chat_id, text))
+
+        results.sort(key=lambda x: x[0], reverse=True)
+        return [(chat_id, text) for _, chat_id, text in results[:limit]]
