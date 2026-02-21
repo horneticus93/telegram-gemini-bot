@@ -110,8 +110,7 @@ async def _update_chat_profile(chat_id: int, chat_name: str) -> None:
             recent_history=recent_history,
             chat_name=chat_name,
         )
-        new_embedding = gemini_client.embed_text(new_profile) if new_profile else None
-        user_memory.update_chat_profile(chat_id, new_profile, embedding=new_embedding)
+        user_memory.update_chat_profile(chat_id, new_profile)
         logger.info("Updated memory profile for chat %s (%s)", chat_id, chat_name)
     except Exception:
         logger.exception("Failed to update profile for chat %s", chat_id)
