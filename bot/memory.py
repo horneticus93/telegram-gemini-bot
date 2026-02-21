@@ -9,6 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class UserMemory:
+    FACT_RECENCY_DECAY_DAYS = 14.0
+    FACT_WEIGHT_SEMANTIC = 0.60
+    FACT_WEIGHT_RECENCY = 0.25
+    FACT_WEIGHT_IMPORTANCE = 0.15
+
     def __init__(self, db_path: str = "/app/data/memory.db"):
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -91,21 +96,10 @@ class UserMemory:
                     
         # Calculate cosine similarity
         results = []
-        
-        # Calculate query magnitude
-        query_mag = math.sqrt(sum(v * v for v in query_embedding))
-        if query_mag == 0:
-            return []
-            
+
         for uid, name, text, emb in profiles_with_embeddings:
-            if len(emb) != len(query_embedding):
-                continue
-                
-            dot_product = sum(a * b for a, b in zip(emb, query_embedding))
-            emb_mag = math.sqrt(sum(v * v for v in emb))
-            
-            if emb_mag > 0:
-                similarity = dot_product / (query_mag * emb_mag)
+            similarity = _cosine_similarity(emb, query_embedding)
+            if similarity is not None:
                 results.append((similarity, uid, name, text))
                 
         # Sort by similarity descending
@@ -113,6 +107,230 @@ class UserMemory:
         
         # Return only the matched names and text (without similarity score)
         return [(uid, name, text) for _, uid, name, text in results[:limit]]
+
+    def upsert_user_facts(self, user_id: int, chat_id: int, facts: list[dict]) -> None:
+        self._upsert_facts(scope="user", user_id=user_id, chat_id=chat_id, facts=facts)
+
+    def upsert_chat_facts(self, chat_id: int, facts: list[dict]) -> None:
+        self._upsert_facts(scope="chat", user_id=None, chat_id=chat_id, facts=facts)
+
+    def _upsert_facts(
+        self,
+        scope: str,
+        user_id: int | None,
+        chat_id: int | None,
+        facts: list[dict],
+    ) -> None:
+        if not facts:
+            return
+
+        now = _now_iso()
+        with sqlite3.connect(self.db_path) as conn:
+            for item in facts:
+                fact_text = str(item.get("fact") or item.get("fact_text") or "").strip()
+                if not fact_text:
+                    continue
+                importance = _clamp01(item.get("importance", 0.5))
+                confidence = _clamp01(item.get("confidence", 0.8))
+                embedding = item.get("embedding")
+                emb_json = json.dumps(embedding) if embedding else None
+
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM memory_facts
+                    WHERE scope = ?
+                      AND COALESCE(user_id, -1) = COALESCE(?, -1)
+                      AND COALESCE(chat_id, -1) = COALESCE(?, -1)
+                      AND fact_text = ?
+                    """,
+                    (scope, user_id, chat_id, fact_text),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE memory_facts
+                        SET embedding = COALESCE(?, embedding),
+                            importance = ?,
+                            confidence = ?,
+                            is_active = 1,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (emb_json, importance, confidence, now, existing[0]),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO memory_facts (
+                            scope, user_id, chat_id, fact_text, embedding,
+                            importance, confidence, is_active, use_count,
+                            last_used_at, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, ?, ?)
+                        """,
+                        (
+                            scope,
+                            user_id,
+                            chat_id,
+                            fact_text,
+                            emb_json,
+                            importance,
+                            confidence,
+                            now,
+                            now,
+                        ),
+                    )
+            conn.commit()
+
+    def get_user_facts(self, user_id: int, limit: int = 30) -> list[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT fact_text
+                FROM memory_facts
+                WHERE scope = 'user'
+                  AND user_id = ?
+                  AND is_active = 1
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def get_chat_facts(self, chat_id: int, limit: int = 30) -> list[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT fact_text
+                FROM memory_facts
+                WHERE scope = 'chat'
+                  AND chat_id = ?
+                  AND is_active = 1
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (chat_id, limit),
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def search_facts_by_embedding(
+        self,
+        query_embedding: list[float],
+        chat_id: int,
+        asking_user_id: int,
+        limit: int = 3,
+        min_semantic: float = 0.2,
+        cooldown_seconds: int = 900,
+    ) -> list[dict]:
+        if not query_embedding:
+            return []
+
+        now_dt = datetime.now(timezone.utc)
+        results = []
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    f.id,
+                    f.scope,
+                    f.user_id,
+                    f.chat_id,
+                    f.fact_text,
+                    f.embedding,
+                    f.importance,
+                    f.last_used_at,
+                    f.updated_at,
+                    p.first_name
+                FROM memory_facts f
+                LEFT JOIN user_profiles p ON p.user_id = f.user_id
+                WHERE f.is_active = 1
+                  AND f.embedding IS NOT NULL
+                  AND (
+                      (f.scope = 'chat' AND f.chat_id = ?)
+                      OR (f.scope = 'user' AND f.user_id = ?)
+                      OR (
+                          f.scope = 'user'
+                          AND f.user_id IN (
+                              SELECT user_id FROM chat_memberships WHERE chat_id = ?
+                          )
+                      )
+                  )
+                """,
+                (chat_id, asking_user_id, chat_id),
+            ).fetchall()
+
+            for row in rows:
+                try:
+                    (
+                        fact_id,
+                        scope,
+                        fact_user_id,
+                        fact_chat_id,
+                        fact_text,
+                        emb_str,
+                        importance,
+                        last_used_at,
+                        updated_at,
+                        owner_name,
+                    ) = row
+                    embedding = json.loads(emb_str)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+
+                semantic = _cosine_similarity(embedding, query_embedding)
+                if semantic is None or semantic < min_semantic:
+                    continue
+
+                if last_used_at:
+                    last_used_dt = _parse_ts(last_used_at)
+                    if (now_dt - last_used_dt).total_seconds() < cooldown_seconds:
+                        continue
+
+                updated_dt = _parse_ts(updated_at)
+                age_days = max((now_dt - updated_dt).total_seconds() / 86400.0, 0.0)
+                recency = math.exp(-age_days / self.FACT_RECENCY_DECAY_DAYS)
+                importance_score = _clamp01(importance)
+
+                score = (
+                    self.FACT_WEIGHT_SEMANTIC * semantic
+                    + self.FACT_WEIGHT_RECENCY * recency
+                    + self.FACT_WEIGHT_IMPORTANCE * importance_score
+                )
+                results.append(
+                    {
+                        "fact_id": fact_id,
+                        "scope": scope,
+                        "user_id": fact_user_id,
+                        "chat_id": fact_chat_id,
+                        "owner_name": owner_name or "Unknown",
+                        "fact_text": fact_text,
+                        "semantic_score": semantic,
+                        "recency_score": recency,
+                        "importance_score": importance_score,
+                        "score": score,
+                    }
+                )
+
+        results.sort(key=lambda item: item["score"], reverse=True)
+        return results[:limit]
+
+    def mark_facts_used(self, fact_ids: list[int]) -> None:
+        if not fact_ids:
+            return
+        placeholders = ",".join("?" for _ in fact_ids)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"""
+                UPDATE memory_facts
+                SET use_count = use_count + 1,
+                    last_used_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                (_now_iso(), *fact_ids),
+            )
+            conn.commit()
 
     def get_chat_members(self, chat_id: int) -> list[tuple[int, str]]:
         """Return a list of (user_id, first_name) for members in this chat."""
@@ -128,4 +346,39 @@ class UserMemory:
                 (chat_id,),
             ).fetchall()
             return [(row[0], row[1]) for row in rows]
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_ts(ts: str | None) -> datetime:
+    if not ts:
+        return datetime.now(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(ts)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
+        return datetime.now(timezone.utc)
+
+
+def _clamp01(value: float | int | None) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, parsed))
+
+
+def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float | None:
+    if len(vec_a) != len(vec_b):
+        return None
+    mag_a = math.sqrt(sum(v * v for v in vec_a))
+    mag_b = math.sqrt(sum(v * v for v in vec_b))
+    if mag_a == 0 or mag_b == 0:
+        return None
+    dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
+    return dot_product / (mag_a * mag_b)
 

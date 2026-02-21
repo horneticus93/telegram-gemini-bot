@@ -2,6 +2,8 @@ import pytest
 from bot.memory import UserMemory
 from alembic.config import Config
 from alembic import command
+from datetime import datetime, timedelta, timezone
+import sqlite3
 
 @pytest.fixture
 def mem(tmp_path):
@@ -91,6 +93,119 @@ def test_search_profiles_by_embedding(mem):
 def test_search_profiles_by_embedding_empty_or_invalid(mem):
     # No profiles with embeddings yet
     assert mem.search_profiles_by_embedding([1.0, 0.0]) == []
+
+
+def test_upsert_user_facts_and_search_by_embedding(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.increment_message_count(2, 100, "bob", "Bob")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice prefers short concise answers.",
+                "importance": 0.9,
+                "confidence": 0.95,
+                "embedding": [1.0, 0.0],
+            }
+        ],
+    )
+    mem.upsert_user_facts(
+        user_id=2,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Bob likes long tutorials.",
+                "importance": 0.2,
+                "confidence": 0.8,
+                "embedding": [0.0, 1.0],
+            }
+        ],
+    )
+
+    results = mem.search_facts_by_embedding(
+        query_embedding=[0.95, 0.3], chat_id=100, asking_user_id=1, limit=3
+    )
+
+    assert len(results) == 2
+    assert results[0]["fact_text"] == "Alice prefers short concise answers."
+    assert results[0]["scope"] == "user"
+    assert results[0]["owner_name"] == "Alice"
+    assert "score" in results[0]
+
+
+def test_search_facts_respects_cooldown(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice wants gentle feedback style.",
+                "importance": 0.8,
+                "confidence": 0.9,
+                "embedding": [1.0, 0.0],
+            }
+        ],
+    )
+    first = mem.search_facts_by_embedding(
+        query_embedding=[1.0, 0.0], chat_id=100, asking_user_id=1, limit=3
+    )
+    assert len(first) == 1
+    mem.mark_facts_used([first[0]["fact_id"]])
+
+    second = mem.search_facts_by_embedding(
+        query_embedding=[1.0, 0.0],
+        chat_id=100,
+        asking_user_id=1,
+        limit=3,
+        cooldown_seconds=3600,
+    )
+    assert second == []
+
+
+def test_search_facts_uses_recency_and_importance(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.increment_message_count(2, 100, "bob", "Bob")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice likes practical examples.",
+                "importance": 0.95,
+                "confidence": 0.9,
+                "embedding": [0.7, 0.7],
+            }
+        ],
+    )
+    mem.upsert_user_facts(
+        user_id=2,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Bob likes abstract theory.",
+                "importance": 0.2,
+                "confidence": 0.9,
+                "embedding": [0.72, 0.69],
+            }
+        ],
+    )
+    with sqlite3.connect(mem.db_path) as conn:
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        conn.execute(
+            "UPDATE memory_facts SET updated_at = ? WHERE fact_text = ?",
+            (old_ts, "Bob likes abstract theory."),
+        )
+        conn.commit()
+
+    ranked = mem.search_facts_by_embedding(
+        query_embedding=[0.71, 0.70], chat_id=100, asking_user_id=1, limit=2
+    )
+    assert [r["fact_text"] for r in ranked] == [
+        "Alice likes practical examples.",
+        "Bob likes abstract theory.",
+    ]
     
     # Add profile without embedding
     mem.increment_message_count(1, 100, "alice", "Alice")

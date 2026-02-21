@@ -8,7 +8,7 @@ If you edit code here, follow these project-specific rules before generic habits
 - Runtime: async Telegram bot (`python-telegram-bot`) with Gemini for generation + embeddings.
 - Memory model:
   - Short-term: in-memory chat session history (`bot/session.py`).
-  - Long-term: SQLite profiles + embeddings via Alembic-managed schema (`bot/memory.py`, `alembic/versions/`).
+  - Long-term: SQLite facts memory + profile compatibility fields via Alembic-managed schema (`bot/memory.py`, `alembic/versions/`).
 - Deployment: Docker Compose with two services:
   - `bot` (main app)
   - `datasette` (read/edit DB UI)
@@ -40,10 +40,11 @@ If you edit code here, follow these project-specific rules before generic habits
    - builds question (mention stripped);
    - fetches history + profiles + members;
    - computes query embedding;
-   - runs vector search and injects retrieved profiles into model call;
+   - runs fact retrieval with semantic + recency + importance reranking and cooldown filtering;
+   - injects only top relevant facts into model call;
    - parses tuple `(answer, save_to_profile)`;
    - sends Telegram reply (with 4096-char splitting);
-   - triggers immediate user profile refresh when flagged.
+   - triggers immediate user facts refresh when flagged.
 
 Do not break this control flow without updating tests accordingly.
 
@@ -88,6 +89,11 @@ Use this mental model when changing `bot/handlers.py`:
 - Embeddings are stored as JSON text, not native vector type.
 - Similarity is manual cosine similarity in Python.
 - Empty embedding inputs must safely return empty search results.
+- `memory_facts` is the primary long-term memory source for retrieval.
+- Fact retrieval must preserve relevance gating:
+  - semantic threshold,
+  - recency/importance reranking,
+  - cooldown to avoid repetitive fact injection.
 
 ## SQLite Tables and Their Functions
 
@@ -105,6 +111,16 @@ Current schema (managed by Alembic migrations) includes these tables:
   - Join table keyed by `(user_id, chat_id)`.
   - Tracks which users have appeared in which chats.
   - Used for building "known members in this chat" context passed to Gemini.
+
+- `memory_facts`
+  - Stores atomic memory entries with metadata (scope, importance, confidence, embeddings, last-used markers).
+  - Supports `user` scope facts and `chat` scope facts.
+  - Used for fact-based retrieval before each model call.
+  - Retrieval strategy combines:
+    - semantic similarity (embedding cosine),
+    - recency decay,
+    - importance weighting,
+    - cooldown filtering for anti-repetition.
 
 Notes for agents:
 

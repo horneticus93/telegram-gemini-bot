@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from bot.gemini import GeminiClient, _parse_bot_response
+from bot.gemini import GeminiClient, SYSTEM_PROMPT, _parse_bot_response
 
 
 # --- _parse_bot_response unit tests ---
@@ -217,3 +217,48 @@ def test_extract_profile_returns_text(mock_client_cls):
     )
     assert result == "Alice is a nurse who likes hiking."
     mock_client.models.generate_content.assert_called_once()
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_facts_returns_structured_list(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = (
+        '[{"fact":"Alice prefers concise answers","importance":0.9,"confidence":0.95,'
+        '"scope":"user"},{"fact":"This chat uses Ukrainian","importance":0.7,'
+        '"confidence":0.9,"scope":"chat"}]'
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    facts = client.extract_facts(
+        existing_facts=["Alice likes short replies."],
+        recent_history="[Alice]: Please keep it short and in Ukrainian",
+        user_name="Alice",
+    )
+    assert facts[0]["fact"] == "Alice prefers concise answers"
+    assert facts[0]["scope"] == "user"
+    assert facts[1]["scope"] == "chat"
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_facts_falls_back_to_empty_list_on_invalid_json(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "No new facts."
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    facts = client.extract_facts(
+        existing_facts=[],
+        recent_history="[Alice]: hello",
+        user_name="Alice",
+    )
+    assert facts == []
+
+
+def test_system_prompt_requires_optional_memory_usage():
+    assert "ONLY when they are relevant" in SYSTEM_PROMPT
+    assert "Do not force these facts" in SYSTEM_PROMPT
