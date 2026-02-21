@@ -65,28 +65,6 @@ class UserMemory:
             if cursor.rowcount == 0:
                 logger.warning("update_profile: no row found for user_id=%s", user_id)
 
-    def get_chat_profile(self, chat_id: int) -> str:
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT profile FROM chat_profiles WHERE chat_id = ?",
-                (chat_id,),
-            ).fetchone()
-            return row[0] if row and row[0] else ""
-
-    def update_chat_profile(self, chat_id: int, profile: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO chat_profiles (chat_id, profile, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(chat_id) DO UPDATE SET
-                    profile = excluded.profile,
-                    updated_at = excluded.updated_at
-                """,
-                (chat_id, profile, datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
-
     def search_profiles_by_embedding(self, query_embedding: list[float], limit: int = 5) -> list[tuple[int, str, str]]:
         """Search across all user profiles and return the top `limit` matches based on cosine similarity.
 
