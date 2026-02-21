@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from telegram import Update, Message, User, Chat
@@ -203,3 +204,26 @@ async def test_vector_search_rag_injection():
                 call_kwargs = mock_gemini.ask.call_args.kwargs
                 retrieved = call_kwargs.get("retrieved_profiles")
                 assert retrieved == ["Alice: Alice loves apples"]
+
+
+@pytest.mark.asyncio
+async def test_sends_typing_action():
+    from bot.handlers import handle_message
+    update = make_update("@testbot tell me a story", chat_id=123, first_name="Dave")
+    context = make_context(bot_username="testbot")
+    context.bot.send_chat_action = AsyncMock()
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {123}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = ("Once upon a time...", False)
+            
+            # Use a side_effect that actually yields control
+            original_sleep = asyncio.sleep
+            async def fast_sleep(n):
+                await original_sleep(0)
+
+            with patch("bot.handlers.asyncio.sleep", side_effect=fast_sleep):
+                await handle_message(update, context)
+
+    # Verify typing action was sent
+    context.bot.send_chat_action.assert_called_with(chat_id=123, action="typing")
