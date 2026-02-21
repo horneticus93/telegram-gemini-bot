@@ -155,6 +155,40 @@ def test_ask_includes_chat_members_in_prompt(mock_client_cls):
 
 
 @patch("bot.gemini.genai.Client")
+def test_ask_includes_chat_profile_in_prompt(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history=[], question="What is this group about?", chat_profile="This group likes open source projects.")
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    all_texts = " ".join(part.text for c in contents for part in c.parts)
+    assert "This group likes open source projects." in all_texts
+
+
+@patch("bot.gemini.genai.Client")
+def test_ask_without_chat_profile_omits_chat_section(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"answer": "Answer", "save_to_profile": false}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    client.ask(history=[], question="Hello", chat_profile="")
+
+    call_kwargs = mock_client.models.generate_content.call_args
+    contents = call_kwargs.kwargs.get("contents") or call_kwargs.args[1]
+    all_texts = " ".join(part.text for c in contents for part in c.parts)
+    assert "Profile of this chat/group:" not in all_texts
+
+
+@patch("bot.gemini.genai.Client")
 def test_ask_history_roles_are_preserved(mock_client_cls):
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
@@ -207,4 +241,22 @@ def test_extract_profile_returns_text(mock_client_cls):
         user_name="Alice",
     )
     assert result == "Alice is a nurse who likes hiking."
+    mock_client.models.generate_content.assert_called_once()
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_chat_profile_returns_text(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = "This group usually discusses Python tooling and release automation."
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_chat_profile(
+        existing_profile="",
+        recent_history="[Alice]: let's deploy",
+        chat_name="Core Team",
+    )
+    assert result == "This group usually discusses Python tooling and release automation."
     mock_client.models.generate_content.assert_called_once()

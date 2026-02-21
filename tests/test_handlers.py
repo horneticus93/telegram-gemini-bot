@@ -136,6 +136,30 @@ async def test_passes_user_profile_to_gemini():
 
 
 @pytest.mark.asyncio
+async def test_passes_chat_profile_to_gemini():
+    from bot.handlers import handle_message
+    update = make_update("@testbot what is this group about?", chat_id=55, first_name="Bob")
+    update.message.from_user.id = 991
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {55}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = ("Looks like a dev group.", False)
+            with patch("bot.handlers.user_memory") as mock_memory:
+                mock_memory.increment_message_count.return_value = 1
+                mock_memory.get_profile.return_value = ""
+                mock_memory.get_chat_profile.return_value = "This group is for backend architecture discussions."
+                mock_memory.get_chat_members.return_value = []
+                mock_memory.search_profiles_by_embedding.return_value = []
+                mock_gemini.embed_text.return_value = [0.1, 0.2]
+
+                await handle_message(update, context)
+
+    call_kwargs = mock_gemini.ask.call_args.kwargs
+    assert call_kwargs.get("chat_profile") == "This group is for backend architecture discussions."
+
+
+@pytest.mark.asyncio
 async def test_save_to_profile_triggers_immediate_profile_update():
     """When the model sets save_to_profile=True, _update_user_profile is called."""
     from bot.handlers import handle_message
@@ -149,6 +173,7 @@ async def test_save_to_profile_triggers_immediate_profile_update():
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
+                mock_memory.get_chat_profile.return_value = ""
                 mock_memory.get_chat_members.return_value = []
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
@@ -169,10 +194,39 @@ async def test_no_profile_update_when_save_false():
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
+                mock_memory.get_chat_profile.return_value = ""
                 mock_memory.get_chat_members.return_value = []
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
                     mock_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_schedules_periodic_chat_profile_update():
+    from bot.handlers import handle_message
+    update = make_update("just chatting", chat_id=321, first_name="Ana")
+    context = make_context()
+
+    fake_task = MagicMock()
+    fake_task.cancelled.return_value = False
+    fake_task.exception.return_value = None
+    created_coroutines = []
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        coro.close()
+        return fake_task
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {321}):
+        with patch("bot.handlers.CHAT_MEMORY_UPDATE_INTERVAL", 1):
+            with patch("bot.handlers.asyncio.create_task", side_effect=fake_create_task) as mock_create_task:
+                with patch("bot.handlers._update_chat_profile", new_callable=AsyncMock):
+                    with patch("bot.handlers.user_memory") as mock_memory:
+                        mock_memory.increment_message_count.return_value = 1
+                        await handle_message(update, context)
+
+    mock_create_task.assert_called_once()
+    assert len(created_coroutines) == 1
 
 @pytest.mark.asyncio
 async def test_vector_search_rag_injection():
