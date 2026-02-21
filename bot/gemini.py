@@ -12,12 +12,15 @@ SYSTEM_PROMPT = (
     "Never defer your answer to a future message. "
     "Always provide your complete answer right now, in this single response.\n\n"
     "USE OF MEMORY: Use the provided user profiles and knowledge base ONLY when they are relevant to the current conversation. Do not force these facts into your response if they don't fit naturally.\n\n"
-    "RESPONSE FORMAT: Always reply with a valid JSON object on a single line with exactly two keys:\n"
-    "  {\"answer\": \"<your reply here>\", \"save_to_profile\": <true|false>}\n"
+    "RESPONSE FORMAT: Always reply with a valid JSON object on a single line with exactly three keys:\n"
+    "  {\"answer\": \"<your reply here>\", \"save_to_profile\": <true|false>, \"save_to_memory\": <true|false>}\n"
     "Set save_to_profile to true when:\n"
     "1. The user explicitly asks you to remember or save information.\n"
     "2. The user shares a significant, enduring personal fact, unique characteristic, or stable preference that would be valuable for your long-term memory of them.\n"
-    "For any normal question or situational conversation set save_to_profile to false. "
+    "Set save_to_memory to true when:\n"
+    "1. The user explicitly asks to remember information for the whole chat/group.\n"
+    "2. The conversation contains significant, enduring group-level facts (shared norms, recurring topics, stable context) that should be stored in chat memory.\n"
+    "For any normal question or situational conversation set both flags to false. "
     "Do NOT wrap the JSON in markdown code fences. Output raw JSON only."
 )
 
@@ -36,12 +39,11 @@ class GeminiClient:
         chat_profile: str = "",
         chat_members: list[str] | None = None,
         retrieved_profiles: list[str] | None = None,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, bool, bool]:
         """Send a question to Gemini with full multi-turn conversation history.
 
         Returns:
-            A tuple of (answer_text, save_to_profile) where save_to_profile is
-            True when the user asked to save some personal information.
+            A tuple of (answer_text, save_to_profile, save_to_memory).
 
         Args:
             history: List of ``{"role": "user"|"model", "text": str}`` dicts
@@ -188,7 +190,7 @@ class GeminiClient:
         return response.embeddings[0].values
 
 
-def _parse_bot_response(raw: str) -> tuple[str, bool]:
+def _parse_bot_response(raw: str) -> tuple[str, bool, bool]:
     """Parse the JSON response from the bot.
 
     Falls back gracefully if the model didn't honour the JSON format.
@@ -203,8 +205,9 @@ def _parse_bot_response(raw: str) -> tuple[str, bool]:
     try:
         data = json.loads(text)
         answer = str(data.get("answer", raw))
-        save = bool(data.get("save_to_profile", False))
-        return answer, save
+        save_profile = bool(data.get("save_to_profile", False))
+        save_memory = bool(data.get("save_to_memory", False))
+        return answer, save_profile, save_memory
     except (json.JSONDecodeError, AttributeError):
         # Model didn't return valid JSON — treat the whole text as the answer.
-        return raw, False
+        return raw, False, False

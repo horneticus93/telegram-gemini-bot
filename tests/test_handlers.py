@@ -63,7 +63,7 @@ async def test_replies_when_tagged():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {2}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("It's noon!", False)
+            mock_gemini.ask.return_value = ("It's noon!", False, False)
             await handle_message(update, context)
 
     update.message.reply_text.assert_called_once_with("It's noon!")
@@ -93,7 +93,7 @@ async def test_strips_bot_mention_from_question():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {4}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("4", False)
+            mock_gemini.ask.return_value = ("4", False, False)
             await handle_message(update, context)
 
     call_kwargs = mock_gemini.ask.call_args.kwargs
@@ -127,7 +127,7 @@ async def test_passes_user_profile_to_gemini():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {5}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("Try pasta!", False)
+            mock_gemini.ask.return_value = ("Try pasta!", False, False)
             await handle_message(update, context)
 
     call_kwargs = mock_gemini.ask.call_args.kwargs
@@ -144,7 +144,7 @@ async def test_passes_chat_profile_to_gemini():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {55}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("Looks like a dev group.", False)
+            mock_gemini.ask.return_value = ("Looks like a dev group.", False, False)
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
@@ -169,7 +169,7 @@ async def test_save_to_profile_triggers_immediate_profile_update():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {6}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("Got it, I'll remember that!", True)
+            mock_gemini.ask.return_value = ("Got it, I'll remember that!", True, False)
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
@@ -190,7 +190,7 @@ async def test_no_profile_update_when_save_false():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {7}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("4", False)
+            mock_gemini.ask.return_value = ("4", False, False)
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
@@ -199,6 +199,29 @@ async def test_no_profile_update_when_save_false():
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
                     mock_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_to_memory_triggers_immediate_chat_profile_update():
+    """When the model sets save_to_memory=True, _update_chat_profile is called."""
+    from bot.handlers import handle_message
+    update = make_update("@testbot remember this for the group", chat_id=16, first_name="Eve")
+    update.message.from_user.id = 707
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {16}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = ("Saved to chat memory.", False, True)
+            with patch("bot.handlers.user_memory") as mock_memory:
+                mock_memory.increment_message_count.return_value = 1
+                mock_memory.get_profile.return_value = ""
+                mock_memory.get_chat_profile.return_value = ""
+                mock_memory.get_chat_members.return_value = []
+                mock_memory.search_profiles_by_embedding.return_value = []
+                mock_gemini.embed_text.return_value = [0.2, 0.4]
+                with patch("bot.handlers._update_chat_profile", new_callable=AsyncMock) as mock_chat_update:
+                    await handle_message(update, context)
+                    mock_chat_update.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -238,7 +261,7 @@ async def test_vector_search_rag_injection():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {8}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("Alice does!", False)
+            mock_gemini.ask.return_value = ("Alice does!", False, False)
             mock_gemini.embed_text.return_value = [0.1, 0.2, 0.3]
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
@@ -269,7 +292,7 @@ async def test_sends_typing_action():
 
     with patch("bot.handlers.ALLOWED_CHAT_IDS", {123}):
         with patch("bot.handlers.gemini_client") as mock_gemini:
-            mock_gemini.ask.return_value = ("Once upon a time...", False)
+            mock_gemini.ask.return_value = ("Once upon a time...", False, False)
             
             # Use a side_effect that actually yields control
             original_sleep = asyncio.sleep
