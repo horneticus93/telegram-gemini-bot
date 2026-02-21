@@ -65,25 +65,29 @@ class UserMemory:
             if cursor.rowcount == 0:
                 logger.warning("update_profile: no row found for user_id=%s", user_id)
 
-    def search_profiles_by_embedding(self, query_embedding: list[float], limit: int = 5) -> list[tuple[str, str]]:
-        """Search across all user profiles and return the top `limit` matches based on cosine similarity."""
+    def search_profiles_by_embedding(self, query_embedding: list[float], limit: int = 5) -> list[tuple[int, str, str]]:
+        """Search across all user profiles and return the top `limit` matches based on cosine similarity.
+
+        Returns:
+            List of (user_id, first_name, profile) tuples.
+        """
         if not query_embedding:
             return []
             
         profiles_with_embeddings = []
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT first_name, profile, profile_embedding FROM user_profiles "
+                "SELECT user_id, first_name, profile, profile_embedding FROM user_profiles "
                 "WHERE profile_embedding IS NOT NULL AND profile != ''"
             ).fetchall()
             
             for row in rows:
                 try:
-                    name, text, emb_str = row
+                    uid, name, text, emb_str = row
                     emb = json.loads(emb_str)
-                    profiles_with_embeddings.append((name, text, emb))
+                    profiles_with_embeddings.append((uid, name, text, emb))
                 except (json.JSONDecodeError, ValueError) as e:
-                    logger.warning("Failed to decode embedding for %s: %s", row[0], e)
+                    logger.warning("Failed to decode embedding for %s: %s", row[1], e)
                     
         # Calculate cosine similarity
         results = []
@@ -93,7 +97,7 @@ class UserMemory:
         if query_mag == 0:
             return []
             
-        for name, text, emb in profiles_with_embeddings:
+        for uid, name, text, emb in profiles_with_embeddings:
             if len(emb) != len(query_embedding):
                 continue
                 
@@ -102,19 +106,20 @@ class UserMemory:
             
             if emb_mag > 0:
                 similarity = dot_product / (query_mag * emb_mag)
-                results.append((similarity, name, text))
+                results.append((similarity, uid, name, text))
                 
         # Sort by similarity descending
         results.sort(key=lambda x: x[0], reverse=True)
         
         # Return only the matched names and text (without similarity score)
-        return [(name, text) for _, name, text in results[:limit]]
+        return [(uid, name, text) for _, uid, name, text in results[:limit]]
 
-    def get_chat_members(self, chat_id: int) -> list[str]:
+    def get_chat_members(self, chat_id: int) -> list[tuple[int, str]]:
+        """Return a list of (user_id, first_name) for members in this chat."""
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
                 """
-                SELECT p.first_name
+                SELECT p.user_id, p.first_name
                 FROM user_profiles p
                 JOIN chat_memberships m ON p.user_id = m.user_id
                 WHERE m.chat_id = ?
@@ -122,4 +127,4 @@ class UserMemory:
                 """,
                 (chat_id,),
             ).fetchall()
-            return [row[0] for row in rows]
+            return [(row[0], row[1]) for row in rows]

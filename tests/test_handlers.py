@@ -189,8 +189,8 @@ async def test_vector_search_rag_injection():
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
-                mock_memory.get_chat_members.return_value = ["Alice"]
-                mock_memory.search_profiles_by_embedding.return_value = [("Alice", "Alice loves apples")]
+                mock_memory.get_chat_members.return_value = [(1, "Alice")]
+                mock_memory.search_profiles_by_embedding.return_value = [(1, "Alice", "Alice loves apples")]
                 
                 await handle_message(update, context)
                 
@@ -203,7 +203,7 @@ async def test_vector_search_rag_injection():
                 # Verify retrieved profile was passed to ask()
                 call_kwargs = mock_gemini.ask.call_args.kwargs
                 retrieved = call_kwargs.get("retrieved_profiles")
-                assert retrieved == ["Alice: Alice loves apples"]
+                assert retrieved == ["Alice [ID: 1]: Alice loves apples"]
 
 
 @pytest.mark.asyncio

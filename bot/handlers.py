@@ -77,7 +77,7 @@ async def _update_user_profile(
         new_profile = gemini_client.extract_profile(
             existing_profile=existing_profile,
             recent_history=recent_history,
-            user_name=user_name,
+            user_name=f"{user_name} [ID: {user_id}]",
         )
         new_embedding = gemini_client.embed_text(new_profile) if new_profile else None
         user_memory.update_profile(user_id, new_profile, embedding=new_embedding)
@@ -97,7 +97,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.message.from_user
     if user is None:
         return
-    author = user.first_name or user.username or "Unknown"
+    author = f"{user.first_name or 'Unknown'} [ID: {user.id}]"
     text = update.message.text
 
     session_manager.add_message(chat_id, "user", text, author=author)
@@ -143,14 +143,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Perform Vector Search for RAG
         query_embedding = await asyncio.to_thread(gemini_client.embed_text, question)
         search_results = user_memory.search_profiles_by_embedding(query_embedding, limit=3)
-        retrieved_profiles = [f"{name}: {prof}" for name, prof in search_results] if search_results else None
+        retrieved_profiles = [f"{name} [ID: {uid}]: {prof}" for uid, name, prof in search_results] if search_results else None
 
         response, save_to_profile = await asyncio.to_thread(
             gemini_client.ask,
             history=history,
             question=question,
             user_profile=user_profile,
-            chat_members=chat_members,
+            chat_members=[f"{name} [ID: {uid}]" for uid, name in chat_members],
             retrieved_profiles=retrieved_profiles,
         )
         typing_task.cancel()

@@ -61,8 +61,8 @@ def test_get_chat_members_returns_known_first_names(mem):
     mem.increment_message_count(2, 100, "bob", "Bob")
     mem.increment_message_count(3, 200, "carol", "Carol")  # different chat
     members = mem.get_chat_members(chat_id=100)
-    assert set(members) == {"Alice", "Bob"}
-    assert "Carol" not in members
+    assert set(members) == {(1, "Alice"), (2, "Bob")}
+    assert (3, "Carol") not in members
 
 
 def test_get_chat_members_empty_chat_returns_empty(mem):
@@ -85,8 +85,8 @@ def test_search_profiles_by_embedding(mem):
     # Query somewhat similar to Alice
     results = mem.search_profiles_by_embedding([0.9, 0.1], limit=2)
     assert len(results) == 2
-    assert results[0][0] == "Alice"
-    assert results[1][0] == "Bob"
+    assert results[0] == (1, "Alice", "Alice likes apples")
+    assert results[1] == (2, "Bob", "Bob likes bananas")
 
 def test_search_profiles_by_embedding_empty_or_invalid(mem):
     # No profiles with embeddings yet
