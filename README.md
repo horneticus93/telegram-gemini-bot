@@ -11,7 +11,6 @@ A Telegram bot powered by Google Gemini AI with real-time web search and persist
 - **Short answers** — responds in 3–5 sentences, conversational Telegram style
 - **Private chat support** — responds to every message in a private chat (no tag needed)
 - **Persistent user memory** — stores member profiles and embeddings in an Alembic-managed SQLite database
-- **Persistent chat memory** — stores bot-owned group context per chat and injects it into every request
 - **Chat member awareness** — knows who is in the chat and answers questions accurately about group members
 - **Web UI** — browse and edit user profiles at `http://your-host:8001` via Datasette
 - **Access control** — only responds in whitelisted group chats
@@ -25,8 +24,6 @@ In a **private chat**, it responds to every message directly — no tag needed.
 
 **User Memory & RAG:** After every 10 messages from a person, the bot asks Gemini to update their profile based on recent conversation. It then uses the `gemini-embedding-001` model to calculate a **vector embedding** of this profile and saves it to a persistent SQLite database. 
 When anyone asks a question, the bot calculates the embedding of the question and performs a **Cosine Similarity Search** across the database. It instantly retrieves the 3 most relevant profiles and injects them as hidden background context. This makes the bot essentially an omniscient observer of everyone in the chat, regardless of how many members there are.
-
-**Chat Memory:** The bot also maintains a separate profile for each chat/group (shared context, recurring topics, and stable norms). This profile is updated in the background and included in each Gemini request.
 
 ---
 
@@ -75,7 +72,6 @@ GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 ALLOWED_CHAT_IDS=-100123456789
 MAX_HISTORY_MESSAGES=100
 MEMORY_UPDATE_INTERVAL=10
-CHAT_MEMORY_UPDATE_INTERVAL=10
 DB_PATH=/app/data/memory.db
 ```
 
@@ -118,7 +114,6 @@ You should see: `Bot starting, polling for updates...`
 | `ALLOWED_CHAT_IDS` | Yes | — | Comma-separated list of group chat IDs the bot will respond in |
 | `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in context per chat |
 | `MEMORY_UPDATE_INTERVAL` | No | `10` | How many messages between automatic profile updates |
-| `CHAT_MEMORY_UPDATE_INTERVAL` | No | `MEMORY_UPDATE_INTERVAL` | How many chat messages between automatic chat-profile updates |
 | `DB_PATH` | No | `/app/data/memory.db` | Path to the Alembic-managed SQLite database |
 
 ### Available Gemini models
@@ -158,14 +153,6 @@ The bot builds a persistent profile for each person. Profiles are stored in a SQ
 - **Automatic updates** — after every `MEMORY_UPDATE_INTERVAL` messages, the bot updates the profile in the background
 - **Immediate update** — say `remember`, `запам'ятай`, or `запомни` to trigger an update right away
 - **Injected into responses** — the profile and list of known chat members are included in every Gemini request
-
-## Chat Memory
-
-The bot also keeps a separate persistent profile for each group chat (`chat_id`), owned by the bot itself. This profile captures long-term group context and is injected into every request.
-
-- **Automatic updates** — after every `CHAT_MEMORY_UPDATE_INTERVAL` messages in a chat
-- **Bot-owned knowledge base** — independent from user profiles
-- **Injected into responses** — chat profile is included together with user memory context
 
 ### Web UI
 

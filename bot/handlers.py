@@ -16,15 +16,11 @@ ALLOWED_CHAT_IDS: set[int] = {
 }
 
 MEMORY_UPDATE_INTERVAL = int(os.getenv("MEMORY_UPDATE_INTERVAL", "10"))
-CHAT_MEMORY_UPDATE_INTERVAL = int(
-    os.getenv("CHAT_MEMORY_UPDATE_INTERVAL", str(MEMORY_UPDATE_INTERVAL))
-)
 
 session_manager = SessionManager(
     max_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
 )
 user_memory = UserMemory(db_path=os.getenv("DB_PATH", "/app/data/memory.db"))
-chat_message_counts: dict[int, int] = {}
 
 
 class _LazyGeminiClient:
@@ -46,15 +42,13 @@ class _LazyGeminiClient:
         history: list[dict],
         question: str,
         user_profile: str = "",
-        chat_profile: str = "",
         chat_members: list[str] | None = None,
         retrieved_profiles: list[str] | None = None,
-    ) -> tuple[str, bool, bool]:
+    ) -> tuple[str, bool]:
         return self._get().ask(
             history=history,
             question=question,
             user_profile=user_profile,
-            chat_profile=chat_profile,
             chat_members=chat_members,
             retrieved_profiles=retrieved_profiles,
         )
@@ -66,15 +60,6 @@ class _LazyGeminiClient:
             existing_profile=existing_profile,
             recent_history=recent_history,
             user_name=user_name,
-        )
-
-    def extract_chat_profile(
-        self, existing_profile: str, recent_history: str, chat_name: str
-    ) -> str:
-        return self._get().extract_chat_profile(
-            existing_profile=existing_profile,
-            recent_history=recent_history,
-            chat_name=chat_name,
         )
 
     def embed_text(self, text: str) -> list[float]:
@@ -101,21 +86,6 @@ async def _update_user_profile(
         logger.exception("Failed to update profile for user %s", user_id)
 
 
-async def _update_chat_profile(chat_id: int, chat_name: str) -> None:
-    try:
-        existing_profile = user_memory.get_chat_profile(chat_id)
-        recent_history = session_manager.format_history(chat_id)
-        new_profile = gemini_client.extract_chat_profile(
-            existing_profile=existing_profile,
-            recent_history=recent_history,
-            chat_name=chat_name,
-        )
-        user_memory.update_chat_profile(chat_id, new_profile)
-        logger.info("Updated memory profile for chat %s (%s)", chat_id, chat_name)
-    except Exception:
-        logger.exception("Failed to update profile for chat %s", chat_id)
-
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
@@ -129,10 +99,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     author = f"{user.first_name or 'Unknown'} [ID: {user.id}]"
     text = update.message.text
-    chat_name = update.message.chat.title or str(chat_id)
-
     session_manager.add_message(chat_id, "user", text, author=author)
-    chat_message_counts[chat_id] = chat_message_counts.get(chat_id, 0) + 1
 
     msg_count = user_memory.increment_message_count(
         user_id=user.id,
@@ -147,14 +114,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if not t.cancelled() and t.exception() is not None
             else None
         )
-    if chat_message_counts[chat_id] % CHAT_MEMORY_UPDATE_INTERVAL == 0:
-        chat_task = asyncio.create_task(_update_chat_profile(chat_id, chat_name))
-        chat_task.add_done_callback(
-            lambda t: logger.error("Unhandled error in background chat profile update: %s", t.exception())
-            if not t.cancelled() and t.exception() is not None
-            else None
-        )
-
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
     is_reply_to_bot = (
@@ -169,7 +128,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     history = session_manager.get_history(chat_id)
     user_profile = user_memory.get_profile(user.id)
-    chat_profile = user_memory.get_chat_profile(chat_id)
     chat_members = user_memory.get_chat_members(chat_id)
 
     async def send_typing():
@@ -185,12 +143,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         search_results = user_memory.search_profiles_by_embedding(query_embedding, limit=3)
         retrieved_profiles = [f"{name} [ID: {uid}]: {prof}" for uid, name, prof in search_results] if search_results else None
 
-        response, save_to_profile, save_to_memory = await asyncio.to_thread(
+        response, save_to_profile = await asyncio.to_thread(
             gemini_client.ask,
             history=history,
             question=question,
             user_profile=user_profile,
-            chat_profile=chat_profile,
             chat_members=[f"{name} [ID: {uid}]" for uid, name in chat_members],
             retrieved_profiles=retrieved_profiles,
         )
@@ -200,9 +157,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if save_to_profile:
             logger.info("Model flagged save_to_profile for user %s", user.id)
             await _update_user_profile(user.id, chat_id, author)
-        if save_to_memory:
-            logger.info("Model flagged save_to_memory for chat %s", chat_id)
-            await _update_chat_profile(chat_id, chat_name)
 
         if len(response) <= 4096:
             await update.message.reply_text(response)

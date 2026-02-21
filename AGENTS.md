@@ -31,7 +31,7 @@ If you edit code here, follow these project-specific rules before generic habits
    - enforces `ALLOWED_CHAT_IDS`;
    - stores incoming message in session;
    - updates user message counters and chat memberships;
-   - schedules periodic user/chat profile background updates by interval;
+   - schedules periodic user profile background updates by interval;
    - responds only when:
      - chat is private, or
      - message is reply-to-bot, or
@@ -41,9 +41,9 @@ If you edit code here, follow these project-specific rules before generic habits
    - fetches history + profiles + members;
    - computes query embedding;
    - runs vector search and injects retrieved profiles into model call;
-   - parses tuple `(answer, save_to_profile, save_to_memory)`;
+   - parses tuple `(answer, save_to_profile)`;
    - sends Telegram reply (with 4096-char splitting);
-   - triggers immediate profile/chat profile refresh when flags are true.
+   - triggers immediate user profile refresh when flagged.
 
 Do not break this control flow without updating tests accordingly.
 
@@ -58,25 +58,23 @@ Use this mental model when changing `bot/handlers.py`:
 - If answering, the bot builds a context package:
   - recent per-chat history (`SessionManager`);
   - asking user's persistent profile;
-  - chat-level persistent profile;
   - known chat members;
   - semantically retrieved profiles from vector search.
 - The bot sends this package to Gemini and expects a structured JSON decision:
   - text answer,
-  - whether to save/update user profile now,
-  - whether to save/update chat profile now.
+  - whether to save/update user profile now.
 - Profile updates happen in two ways:
-  - periodic background updates by message-count intervals;
-  - immediate updates when model flags request it.
+  - periodic background updates by message-count intervals.
+  - immediate updates when model flag requests it.
 
 ## Non-Negotiable Module Contracts
 
 ### `GeminiClient.ask()` (`bot/gemini.py`)
 
 - Return type must stay:
-  - `tuple[str, bool, bool]` in order `(answer, save_to_profile, save_to_memory)`.
+  - `tuple[str, bool]` in order `(answer, save_to_profile)`.
 - Model prompt expects strict JSON from the model:
-  - `{"answer": "...", "save_to_profile": bool, "save_to_memory": bool}`
+  - `{"answer": "...", "save_to_profile": bool}`
 - `_parse_bot_response` must gracefully fall back to plain text when JSON is invalid.
 
 ### Session shape (`bot/session.py`)
@@ -108,13 +106,6 @@ Current schema (managed by Alembic migrations) includes these tables:
   - Tracks which users have appeared in which chats.
   - Used for building "known members in this chat" context passed to Gemini.
 
-- `chat_profiles`
-  - Stores one persistent row per chat (`chat_id` primary key).
-  - Holds group-level long-term `profile` and `updated_at`.
-  - Used for:
-    - preserving durable chat context (norms, recurring topics);
-    - injecting chat-level context directly into Gemini prompts.
-
 Notes for agents:
 
 - `SessionManager` data is in-memory only and is not stored in SQLite.
@@ -127,7 +118,7 @@ Embeddings make memory retrieval semantic, not keyword-only.
 
 - Without embeddings, the bot can only use exact text matching or full-profile dumps.
 - With embeddings:
-  - user/chat profiles are converted to vectors once stored/updated;
+  - user profiles are converted to vectors once stored/updated;
   - incoming question is embedded at response time;
   - cosine similarity finds the most semantically relevant profiles;
   - only top relevant memory snippets are injected into the model prompt.
@@ -149,7 +140,6 @@ Practical effect:
   - `ALLOWED_CHAT_IDS`
   - `MAX_HISTORY_MESSAGES`
   - `MEMORY_UPDATE_INTERVAL`
-  - `CHAT_MEMORY_UPDATE_INTERVAL`
   - `DB_PATH`
 - If you introduce/change env vars:
   1. update `.env.example`,

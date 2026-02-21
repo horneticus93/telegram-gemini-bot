@@ -12,15 +12,12 @@ SYSTEM_PROMPT = (
     "Never defer your answer to a future message. "
     "Always provide your complete answer right now, in this single response.\n\n"
     "USE OF MEMORY: Use the provided user profiles and knowledge base ONLY when they are relevant to the current conversation. Do not force these facts into your response if they don't fit naturally.\n\n"
-    "RESPONSE FORMAT: Always reply with a valid JSON object on a single line with exactly three keys:\n"
-    "  {\"answer\": \"<your reply here>\", \"save_to_profile\": <true|false>, \"save_to_memory\": <true|false>}\n"
+    "RESPONSE FORMAT: Always reply with a valid JSON object on a single line with exactly two keys:\n"
+    "  {\"answer\": \"<your reply here>\", \"save_to_profile\": <true|false>}\n"
     "Set save_to_profile to true when:\n"
     "1. The user explicitly asks you to remember or save information.\n"
     "2. The user shares a significant, enduring personal fact, unique characteristic, or stable preference that would be valuable for your long-term memory of them.\n"
-    "Set save_to_memory to true when:\n"
-    "1. The user explicitly asks to remember information for the whole chat/group.\n"
-    "2. The conversation contains significant, enduring group-level facts (shared norms, recurring topics, stable context) that should be stored in chat memory.\n"
-    "For any normal question or situational conversation set both flags to false. "
+    "For any normal question or situational conversation set save_to_profile to false. "
     "Do NOT wrap the JSON in markdown code fences. Output raw JSON only."
 )
 
@@ -36,14 +33,13 @@ class GeminiClient:
         history: list[dict],
         question: str,
         user_profile: str = "",
-        chat_profile: str = "",
         chat_members: list[str] | None = None,
         retrieved_profiles: list[str] | None = None,
-    ) -> tuple[str, bool, bool]:
+    ) -> tuple[str, bool]:
         """Send a question to Gemini with full multi-turn conversation history.
 
         Returns:
-            A tuple of (answer_text, save_to_profile, save_to_memory).
+            A tuple of (answer_text, save_to_profile).
 
         Args:
             history: List of ``{"role": "user"|"model", "text": str}`` dicts
@@ -51,15 +47,12 @@ class GeminiClient:
                      the current ``question`` — that is appended automatically.
             question: The current user message (already stripped of bot mention).
             user_profile: Optional profile text injected as context.
-            chat_profile: Optional chat-level memory injected as context.
             chat_members: Optional list of known chat member names.
             retrieved_profiles: Optional list of profile strings retrieved via vector search.
         """
         context_parts = []
         if user_profile:
             context_parts.append(f"Profile of the person asking:\n{user_profile}")
-        if chat_profile:
-            context_parts.append(f"Profile of this chat/group:\n{chat_profile}")
         if chat_members:
             context_parts.append(
                 f"Known members in this chat: {', '.join(chat_members)}"
@@ -149,35 +142,6 @@ class GeminiClient:
             return existing_profile
         return text.strip()
 
-    def extract_chat_profile(
-        self, existing_profile: str, recent_history: str, chat_name: str
-    ) -> str:
-        prompt = (
-            f"You are updating the persistent memory profile for chat '{chat_name}'.\n\n"
-            f"Current chat profile:\n{existing_profile or '(empty)'}\n\n"
-            f"Recent conversation:\n{recent_history}\n\n"
-            f"INSTRUCTIONS:\n"
-            f"1. Extract ONLY durable group-level facts: recurring topics, shared norms/rules, stable interests, and long-term context that helps in future conversations.\n"
-            f"2. STRICTLY IGNORE temporary chatter, one-off events, short-lived plans, and day-specific details.\n"
-            f"3. Do not assume or speculate. Keep only facts explicitly present in the conversation.\n"
-            f"4. If there are no NEW durable chat-level facts, return the Current chat profile unchanged.\n"
-            f"5. Write concise neutral prose, max 180 words.\n"
-        )
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are a strict memory assistant for Telegram chats. "
-                    "Store only long-lasting group context useful for future replies."
-                ),
-            ),
-        )
-        text = response.text
-        if text is None:
-            return existing_profile
-        return text.strip()
-
     def embed_text(self, text: str) -> list[float]:
         """Generate an embedding vector for the given text."""
         if not text:
@@ -190,7 +154,7 @@ class GeminiClient:
         return response.embeddings[0].values
 
 
-def _parse_bot_response(raw: str) -> tuple[str, bool, bool]:
+def _parse_bot_response(raw: str) -> tuple[str, bool]:
     """Parse the JSON response from the bot.
 
     Falls back gracefully if the model didn't honour the JSON format.
@@ -206,8 +170,7 @@ def _parse_bot_response(raw: str) -> tuple[str, bool, bool]:
         data = json.loads(text)
         answer = str(data.get("answer", raw))
         save_profile = bool(data.get("save_to_profile", False))
-        save_memory = bool(data.get("save_to_memory", False))
-        return answer, save_profile, save_memory
+        return answer, save_profile
     except (json.JSONDecodeError, AttributeError):
         # Model didn't return valid JSON — treat the whole text as the answer.
-        return raw, False, False
+        return raw, False
