@@ -50,8 +50,18 @@ async def test_user_name_collision_repro():
             
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.get_profile.return_value = "Oleksandr [2] is a teacher."
+                mock_memory.get_user_facts.return_value = []
                 mock_memory.get_chat_members.return_value = [(1, "Oleksandr"), (2, "Oleksandr")]
-                mock_memory.search_profiles_by_embedding.return_value = [(1, "Oleksandr", "Oleksandr [1] is an engineer.")]
+                mock_memory.search_facts_by_embedding.return_value = [
+                    {
+                        "fact_id": 1,
+                        "scope": "user",
+                        "user_id": 1,
+                        "owner_name": "Oleksandr",
+                        "fact_text": "Oleksandr [1] is an engineer.",
+                        "score": 0.9,
+                    }
+                ]
                 mock_memory.increment_message_count.return_value = 1
                 
                 # User 2 writes

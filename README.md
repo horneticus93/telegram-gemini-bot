@@ -1,16 +1,18 @@
 # Telegram Gemini Bot
 
-A Telegram bot powered by Google Gemini AI with real-time web search and persistent user memory. Designed for small group chats — it silently reads the conversation for context, remembers each person over time, and answers when tagged. Also works in private chats without any tag.
+A Telegram bot powered by Google Gemini AI with real-time web search and persistent memory. Designed for small group chats — it silently reads the conversation for context, remembers useful long-term facts, and answers when tagged. Also works in private chats without any tag.
 
 ## Features
 
 - **Google Gemini 2.0 / 1.5** — answers questions using a state-of-the-art LLM
 - **Live web search** — uses Gemini's built-in Google Search grounding to find current information
 - **Group chat aware** — reads the last 100 messages for context before answering
-- **RAG Semantic Search** — converts chat history into vector embeddings for deep "brain-like" recall of all users
+- **Fact-based long-term memory** — stores atomic user/chat facts instead of one large profile paragraph
+- **Hybrid retrieval ranking** — semantic similarity + recency + importance scoring for better relevance
+- **Anti-repetition memory policy** — cooldown prevents injecting the same memory facts every reply
 - **Short answers** — responds in 3–5 sentences, conversational Telegram style
 - **Private chat support** — responds to every message in a private chat (no tag needed)
-- **Persistent user memory** — stores member profiles and embeddings in an Alembic-managed SQLite database
+- **Persistent memory storage** — stores user/chat facts and embeddings in an Alembic-managed SQLite database
 - **Chat member awareness** — knows who is in the chat and answers questions accurately about group members
 - **Web UI** — browse and edit user profiles at `http://your-host:8001` via Datasette
 - **Access control** — only responds in whitelisted group chats
@@ -18,12 +20,23 @@ A Telegram bot powered by Google Gemini AI with real-time web search and persist
 
 ## How It Works
 
-In a **group chat**, the bot silently reads all messages and stores the last 100 as context. When someone tags it (`@botname your question`), it sends the full conversation history to Gemini along with the question and replies in the group.
+In a **group chat**, the bot silently reads all messages and stores the last 100 as context. When someone tags it (`@botname your question`) or replies to the bot, it prepares context and replies in the group.
 
 In a **private chat**, it responds to every message directly — no tag needed.
 
-**User Memory & RAG:** After every 10 messages from a person, the bot asks Gemini to update their profile based on recent conversation. It then uses the `gemini-embedding-001` model to calculate a **vector embedding** of this profile and saves it to a persistent SQLite database. 
-When anyone asks a question, the bot calculates the embedding of the question and performs a **Cosine Similarity Search** across the database. It instantly retrieves the 3 most relevant profiles and injects them as hidden background context. This makes the bot essentially an omniscient observer of everyone in the chat, regardless of how many members there are.
+**Memory & Retrieval (new):**
+
+1. The bot periodically analyzes recent conversation and extracts **atomic facts** in JSON format:
+   - `user` facts (stable user preferences/traits),
+   - `chat` facts (stable chat-level conventions).
+2. Each fact gets an embedding and metadata (`importance`, `confidence`, timestamps).
+3. On each response, the bot embeds the current question and retrieves candidate facts.
+4. Candidates are ranked by a hybrid score:
+   - semantic cosine similarity,
+   - recency decay,
+   - importance weight.
+5. Cooldown filtering removes recently reused facts, reducing repetitive replies.
+6. Only top relevant facts are injected into the model prompt.
 
 ---
 
@@ -101,6 +114,17 @@ docker compose logs -f
 
 You should see: `Bot starting, polling for updates...`
 
+### 7. Database migrations
+
+The app uses Alembic migrations for schema changes (including the new `memory_facts` table).
+
+- In Docker, migrations run automatically on startup.
+- For manual/local runs:
+
+```bash
+alembic upgrade head
+```
+
 ---
 
 ## Configuration
@@ -109,7 +133,7 @@ You should see: `Bot starting, polling for updates...`
 |---|---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Bot token from @BotFather |
 | `GEMINI_API_KEY` | Yes | — | API key from Google AI Studio |
-| `GEMINI_MODEL` | No | `gemini-1.5-flash` | Gemini generation model to use (see below) |
+| `GEMINI_MODEL` | No | `gemini-3-flash-preview` | Gemini generation model to use (see below) |
 | `GEMINI_EMBEDDING_MODEL` | No | `gemini-embedding-001` | Gemini model used for semantic RAG vector embeddings |
 | `ALLOWED_CHAT_IDS` | Yes | — | Comma-separated list of group chat IDs the bot will respond in |
 | `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in context per chat |
@@ -146,13 +170,31 @@ Explain quantum computing in simple terms
 
 ---
 
-## User Memory
+## Memory Architecture
 
-The bot builds a persistent profile for each person. Profiles are stored in a SQLite database and survive container restarts.
+The bot uses a two-layer memory model:
 
-- **Automatic updates** — after every `MEMORY_UPDATE_INTERVAL` messages, the bot updates the profile in the background
-- **Immediate update** — say `remember`, `запам'ятай`, or `запомни` to trigger an update right away
-- **Injected into responses** — the profile and list of known chat members are included in every Gemini request
+- **Short-term memory** — rolling in-memory chat history (`MAX_HISTORY_MESSAGES`)
+- **Long-term memory** — persistent `memory_facts` in SQLite
+
+Long-term memory is fact-based (not one long paragraph). Each fact stores:
+
+- `scope`: `user` or `chat`
+- `fact_text`: short atomic statement
+- `embedding`: vector for semantic retrieval
+- `importance` / `confidence`
+- `last_used_at` / `use_count` for anti-repetition
+
+### Memory update flow
+
+- **Automatic updates** — after every `MEMORY_UPDATE_INTERVAL` messages from a user, the bot extracts new facts in the background
+- **Immediate update** — when model output sets `save_to_profile=true`, the bot immediately refreshes extracted facts for that user
+
+### Memory injection policy
+
+- Memory is treated as **optional context**, not mandatory text
+- The bot injects only the top relevant retrieved facts
+- Recently used facts are skipped via cooldown to avoid repetitive answers
 
 ### Web UI
 
@@ -216,10 +258,10 @@ telegram-gemini-bot/
 ├── alembic.ini        # Alembic schema configuration
 ├── bot/
 │   ├── main.py        # Entry point, Telegram bot setup
-│   ├── handlers.py    # Message routing, LLM extraction wrapper
-│   ├── gemini.py      # Gemini API client (Chat & Embeddings)
+│   ├── handlers.py    # Message routing, memory retrieval, profile/fact updates
+│   ├── gemini.py      # Gemini API client (chat, embeddings, fact extraction)
 │   ├── session.py     # In-memory conversation history
-│   └── memory.py      # Persistent Vector DB & SQLite memory
+│   └── memory.py      # SQLite memory layer (profiles, members, memory_facts)
 ├── tests/             # Unit tests (pytest)
 ├── Dockerfile         # Bot container (runs alembic on boot)
 ├── Dockerfile.datasette  # Web UI container
