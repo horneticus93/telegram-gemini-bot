@@ -47,6 +47,28 @@ If you edit code here, follow these project-specific rules before generic habits
 
 Do not break this control flow without updating tests accordingly.
 
+## Chat Interaction Logic (Detailed)
+
+Use this mental model when changing `bot/handlers.py`:
+
+- Every incoming text message in allowed chats is first recorded into short-term session memory.
+- The bot then decides whether it should answer:
+  - private chat: always answer;
+  - group chat: answer only if mentioned (`@botname`) or directly replied to.
+- If answering, the bot builds a context package:
+  - recent per-chat history (`SessionManager`);
+  - asking user's persistent profile;
+  - chat-level persistent profile;
+  - known chat members;
+  - semantically retrieved profiles from vector search.
+- The bot sends this package to Gemini and expects a structured JSON decision:
+  - text answer,
+  - whether to save/update user profile now,
+  - whether to save/update chat profile now.
+- Profile updates happen in two ways:
+  - periodic background updates by message-count intervals;
+  - immediate updates when model flags request it.
+
 ## Non-Negotiable Module Contracts
 
 ### `GeminiClient.ask()` (`bot/gemini.py`)
@@ -68,6 +90,53 @@ Do not break this control flow without updating tests accordingly.
 - Embeddings are stored as JSON text, not native vector type.
 - Similarity is manual cosine similarity in Python.
 - Empty embedding inputs must safely return empty search results.
+
+## SQLite Tables and Their Functions
+
+Current schema (managed by Alembic migrations) includes these tables:
+
+- `user_profiles`
+  - Stores one persistent row per user (`user_id` primary key).
+  - Holds identity snapshot (`username`, `first_name`), long-term `profile` text, cumulative `msg_count`, optional `profile_embedding`, and `updated_at`.
+  - Used for:
+    - long-term memory about each person;
+    - deciding when periodic user profile refresh should run;
+    - semantic retrieval of relevant people during Q&A.
+
+- `chat_memberships`
+  - Join table keyed by `(user_id, chat_id)`.
+  - Tracks which users have appeared in which chats.
+  - Used for building "known members in this chat" context passed to Gemini.
+
+- `chat_profiles`
+  - Stores one persistent row per chat (`chat_id` primary key).
+  - Holds group-level long-term `profile` and `updated_at`.
+  - Used for:
+    - preserving durable chat context (norms, recurring topics);
+    - injecting chat-level context directly into Gemini prompts.
+
+Notes for agents:
+
+- `SessionManager` data is in-memory only and is not stored in SQLite.
+- SQLite schema must stay aligned with SQL used in `bot/memory.py`.
+- Any table/column change requires Alembic migration plus test updates.
+
+## Why Embeddings Are Needed in This Bot
+
+Embeddings make memory retrieval semantic, not keyword-only.
+
+- Without embeddings, the bot can only use exact text matching or full-profile dumps.
+- With embeddings:
+  - user/chat profiles are converted to vectors once stored/updated;
+  - incoming question is embedded at response time;
+  - cosine similarity finds the most semantically relevant profiles;
+  - only top relevant memory snippets are injected into the model prompt.
+
+Practical effect:
+
+- Better recall of related facts even when wording differs.
+- Smaller, more targeted context sent to Gemini.
+- More consistent answers about people/group history across long conversations.
 
 ## Environment and Config Rules
 
@@ -127,6 +196,10 @@ If behavior changes in routing/memory flags/RAG injection, update or add tests i
 - Keep async boundaries explicit; use `asyncio.to_thread` for blocking client/database-heavy work where already used.
 - Preserve dependency injection by patchability in tests (avoid hard-wiring runtime singletons).
 - Add comments only where logic is subtle (do not add noise comments).
+- Any logic change (new behavior, changed flow, changed contract) must be reflected in `AGENTS.md` in the same task.
+- Any newly added functionality must be covered by tests in `tests/`.
+- After each code change, run relevant tests and ensure existing tests still pass.
+- If existing tests fail due to your change, do not ignore them: update/fix implementation and/or tests so the suite is green again.
 
 ## Completion Checklist
 
