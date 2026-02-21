@@ -49,7 +49,7 @@ class _LazyGeminiClient:
         chat_profile: str = "",
         chat_members: list[str] | None = None,
         retrieved_profiles: list[str] | None = None,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, bool, bool]:
         return self._get().ask(
             history=history,
             question=question,
@@ -186,7 +186,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         search_results = user_memory.search_profiles_by_embedding(query_embedding, limit=3)
         retrieved_profiles = [f"{name} [ID: {uid}]: {prof}" for uid, name, prof in search_results] if search_results else None
 
-        response, save_to_profile = await asyncio.to_thread(
+        response, save_to_profile, save_to_memory = await asyncio.to_thread(
             gemini_client.ask,
             history=history,
             question=question,
@@ -201,6 +201,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if save_to_profile:
             logger.info("Model flagged save_to_profile for user %s", user.id)
             await _update_user_profile(user.id, chat_id, author)
+        if save_to_memory:
+            logger.info("Model flagged save_to_memory for chat %s", chat_id)
+            await _update_chat_profile(chat_id, chat_name)
 
         if len(response) <= 4096:
             await update.message.reply_text(response)
