@@ -33,6 +33,7 @@ class GeminiClient:
         history: list[dict],
         question: str,
         user_profile: str = "",
+        chat_profile: str = "",
         chat_members: list[str] | None = None,
         retrieved_profiles: list[str] | None = None,
     ) -> tuple[str, bool]:
@@ -48,12 +49,15 @@ class GeminiClient:
                      the current ``question`` — that is appended automatically.
             question: The current user message (already stripped of bot mention).
             user_profile: Optional profile text injected as context.
+            chat_profile: Optional chat-level memory injected as context.
             chat_members: Optional list of known chat member names.
             retrieved_profiles: Optional list of profile strings retrieved via vector search.
         """
         context_parts = []
         if user_profile:
             context_parts.append(f"Profile of the person asking:\n{user_profile}")
+        if chat_profile:
+            context_parts.append(f"Profile of this chat/group:\n{chat_profile}")
         if chat_members:
             context_parts.append(
                 f"Known members in this chat: {', '.join(chat_members)}"
@@ -135,6 +139,35 @@ class GeminiClient:
                 system_instruction=(
                     "You are a strict memory assistant. Your ONLY job is to extract permanent, long-lasting facts about a user "
                     "from chat messages. Never record situational chatter, moods, or temporary events. Be objective and factual."
+                ),
+            ),
+        )
+        text = response.text
+        if text is None:
+            return existing_profile
+        return text.strip()
+
+    def extract_chat_profile(
+        self, existing_profile: str, recent_history: str, chat_name: str
+    ) -> str:
+        prompt = (
+            f"You are updating the persistent memory profile for chat '{chat_name}'.\n\n"
+            f"Current chat profile:\n{existing_profile or '(empty)'}\n\n"
+            f"Recent conversation:\n{recent_history}\n\n"
+            f"INSTRUCTIONS:\n"
+            f"1. Extract ONLY durable group-level facts: recurring topics, shared norms/rules, stable interests, and long-term context that helps in future conversations.\n"
+            f"2. STRICTLY IGNORE temporary chatter, one-off events, short-lived plans, and day-specific details.\n"
+            f"3. Do not assume or speculate. Keep only facts explicitly present in the conversation.\n"
+            f"4. If there are no NEW durable chat-level facts, return the Current chat profile unchanged.\n"
+            f"5. Write concise neutral prose, max 180 words.\n"
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a strict memory assistant for Telegram chats. "
+                    "Store only long-lasting group context useful for future replies."
                 ),
             ),
         )
