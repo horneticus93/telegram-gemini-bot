@@ -11,7 +11,8 @@ SYSTEM_PROMPT = (
     "IMPORTANT: Never say you will look something up and get back later. "
     "Never defer your answer to a future message. "
     "Always provide your complete answer right now, in this single response.\n\n"
-    "USE OF MEMORY: Use the provided user profiles and knowledge base ONLY when they are relevant to the current conversation. Do not force these facts into your response if they don't fit naturally.\n\n"
+    "USE OF MEMORY: Use the provided user profiles and knowledge base ONLY when they are relevant to the current conversation. Do not force these facts into your response if they don't fit naturally. "
+    "If memory is not clearly useful, ignore it. Never repeat the same remembered fact in consecutive replies unless the user asks for it.\n\n"
     "RESPONSE FORMAT: Always reply with a valid JSON object on a single line with exactly two keys:\n"
     "  {\"answer\": \"<your reply here>\", \"save_to_profile\": <true|false>}\n"
     "Set save_to_profile to true when:\n"
@@ -141,6 +142,70 @@ class GeminiClient:
         if text is None:
             return existing_profile
         return text.strip()
+
+    def extract_facts(
+        self,
+        existing_facts: list[str],
+        recent_history: str,
+        user_name: str,
+    ) -> list[dict]:
+        facts_block = "\n".join(f"- {fact}" for fact in existing_facts) or "(none)"
+        prompt = (
+            f"You are extracting persistent memory facts for user '{user_name}'.\n\n"
+            f"Existing facts:\n{facts_block}\n\n"
+            f"Recent conversation:\n{recent_history}\n\n"
+            "Return ONLY a JSON array of objects. Each object must be:\n"
+            '{"fact":"...", "importance":0.0-1.0, "confidence":0.0-1.0, "scope":"user"|"chat"}\n\n'
+            "Rules:\n"
+            "1. Include only stable or reusable facts (preferences, enduring traits, recurring constraints, long-term chat conventions).\n"
+            "2. Skip temporary details, emotions of the moment, and one-off tasks.\n"
+            "3. Keep each fact short and atomic.\n"
+            "4. Emit an empty array [] when there are no good new facts.\n"
+            "5. Do not output markdown, prose, or explanations."
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a strict memory extraction system. "
+                    "Output valid JSON only."
+                ),
+            ),
+        )
+        text = (response.text or "").strip()
+        if not text:
+            return []
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        try:
+            data = json.loads(text)
+            if not isinstance(data, list):
+                return []
+            valid_facts: list[dict] = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                fact_text = str(item.get("fact", "")).strip()
+                if not fact_text:
+                    continue
+                scope = item.get("scope", "user")
+                if scope not in {"user", "chat"}:
+                    scope = "user"
+                valid_facts.append(
+                    {
+                        "fact": fact_text,
+                        "importance": float(item.get("importance", 0.5)),
+                        "confidence": float(item.get("confidence", 0.8)),
+                        "scope": scope,
+                    }
+                )
+            return valid_facts
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return []
 
     def embed_text(self, text: str) -> list[float]:
         """Generate an embedding vector for the given text."""

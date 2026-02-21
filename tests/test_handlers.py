@@ -149,7 +149,9 @@ async def test_save_to_profile_triggers_immediate_profile_update():
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
+                mock_memory.get_user_facts.return_value = []
                 mock_memory.get_chat_members.return_value = []
+                mock_memory.search_facts_by_embedding.return_value = []
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
                     mock_update.assert_awaited_once()
@@ -169,14 +171,16 @@ async def test_no_profile_update_when_save_false():
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
+                mock_memory.get_user_facts.return_value = []
                 mock_memory.get_chat_members.return_value = []
+                mock_memory.search_facts_by_embedding.return_value = []
                 with patch("bot.handlers._update_user_profile", new_callable=AsyncMock) as mock_update:
                     await handle_message(update, context)
                     mock_update.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_vector_search_rag_injection():
-    """Verify that handle_message generates an embedding and performs vector search."""
+    """Verify that handle_message generates an embedding and performs fact-based search."""
     from bot.handlers import handle_message
     update = make_update("@testbot Who loves apples?", chat_id=8, first_name="Dave")
     update.message.from_user.id = 111
@@ -189,21 +193,62 @@ async def test_vector_search_rag_injection():
             with patch("bot.handlers.user_memory") as mock_memory:
                 mock_memory.increment_message_count.return_value = 1
                 mock_memory.get_profile.return_value = ""
+                mock_memory.get_user_facts.return_value = []
                 mock_memory.get_chat_members.return_value = [(1, "Alice")]
-                mock_memory.search_profiles_by_embedding.return_value = [(1, "Alice", "Alice loves apples")]
+                mock_memory.search_facts_by_embedding.return_value = [
+                    {
+                        "fact_id": 10,
+                        "scope": "user",
+                        "user_id": 1,
+                        "owner_name": "Alice",
+                        "fact_text": "Alice loves apples",
+                        "score": 0.88,
+                    }
+                ]
                 
                 await handle_message(update, context)
                 
                 # Verify embedding was generated for the question
                 mock_gemini.embed_text.assert_called_once_with("Who loves apples?")
                 
-                # Verify vector search was performed
-                mock_memory.search_profiles_by_embedding.assert_called_once_with([0.1, 0.2, 0.3], limit=3)
+                # Verify fact search was performed with chat/user scope
+                mock_memory.search_facts_by_embedding.assert_called_once_with(
+                    query_embedding=[0.1, 0.2, 0.3],
+                    chat_id=8,
+                    asking_user_id=111,
+                    limit=3,
+                )
                 
-                # Verify retrieved profile was passed to ask()
+                # Verify retrieved facts were passed to ask()
                 call_kwargs = mock_gemini.ask.call_args.kwargs
                 retrieved = call_kwargs.get("retrieved_profiles")
-                assert retrieved == ["Alice [ID: 1]: Alice loves apples"]
+                assert retrieved == ["[user fact] Alice [ID: 1]: Alice loves apples"]
+                mock_memory.mark_facts_used.assert_called_once_with([10])
+
+
+@pytest.mark.asyncio
+async def test_memory_not_injected_when_no_relevant_facts():
+    from bot.handlers import handle_message
+    update = make_update("@testbot explain docker layers", chat_id=81, first_name="Sam")
+    update.message.from_user.id = 812
+    context = make_context(bot_username="testbot")
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {81}):
+        with patch("bot.handlers.gemini_client") as mock_gemini:
+            mock_gemini.ask.return_value = ("Use smaller base images.", False)
+            mock_gemini.embed_text.return_value = [0.4, 0.1, 0.5]
+            with patch("bot.handlers.user_memory") as mock_memory:
+                mock_memory.increment_message_count.return_value = 1
+                mock_memory.get_profile.return_value = ""
+                mock_memory.get_user_facts.return_value = []
+                mock_memory.get_chat_members.return_value = [(812, "Sam")]
+                mock_memory.search_facts_by_embedding.return_value = []
+
+                await handle_message(update, context)
+
+                call_kwargs = mock_gemini.ask.call_args.kwargs
+                assert call_kwargs.get("retrieved_profiles") is None
+                mock_memory.mark_facts_used.assert_not_called()
 
 
 @pytest.mark.asyncio
