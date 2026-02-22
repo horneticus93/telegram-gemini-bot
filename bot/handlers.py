@@ -77,6 +77,20 @@ class _LazyGeminiClient:
             user_name=user_name,
         )
 
+    def decide_fact_action(
+        self,
+        candidate_fact: str,
+        scope: str,
+        similar_facts: list[dict],
+        user_name: str,
+    ) -> dict:
+        return self._get().decide_fact_action(
+            candidate_fact=candidate_fact,
+            scope=scope,
+            similar_facts=similar_facts,
+            user_name=user_name,
+        )
+
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
 
@@ -103,8 +117,38 @@ async def _update_user_profile(
             scoped_fact = dict(item)
             scoped_fact["embedding"] = gemini_client.embed_text(fact_text)
             if item.get("scope") == "chat":
+                similar_facts = user_memory.find_similar_facts(
+                    scope="chat",
+                    query_embedding=scoped_fact["embedding"],
+                    chat_id=chat_id,
+                    limit=3,
+                )
+                if similar_facts:
+                    scoped_fact.update(
+                        gemini_client.decide_fact_action(
+                            candidate_fact=fact_text,
+                            scope="chat",
+                            similar_facts=similar_facts,
+                            user_name=user_name,
+                        )
+                    )
                 chat_facts.append(scoped_fact)
             else:
+                similar_facts = user_memory.find_similar_facts(
+                    scope="user",
+                    query_embedding=scoped_fact["embedding"],
+                    user_id=user_id,
+                    limit=3,
+                )
+                if similar_facts:
+                    scoped_fact.update(
+                        gemini_client.decide_fact_action(
+                            candidate_fact=fact_text,
+                            scope="user",
+                            similar_facts=similar_facts,
+                            user_name=user_name,
+                        )
+                    )
                 user_facts.append(scoped_fact)
 
         if user_facts:
