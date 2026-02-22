@@ -114,6 +114,68 @@ class UserMemory:
     def upsert_chat_facts(self, chat_id: int, facts: list[dict]) -> None:
         self._upsert_facts(scope="chat", user_id=None, chat_id=chat_id, facts=facts)
 
+    def find_similar_facts(
+        self,
+        scope: str,
+        query_embedding: list[float],
+        user_id: int | None = None,
+        chat_id: int | None = None,
+        limit: int = 3,
+        min_semantic: float = 0.35,
+    ) -> list[dict]:
+        if not query_embedding or scope not in {"user", "chat"}:
+            return []
+        if scope == "user" and user_id is None:
+            return []
+        if scope == "chat" and chat_id is None:
+            return []
+
+        with sqlite3.connect(self.db_path) as conn:
+            if scope == "user":
+                rows = conn.execute(
+                    """
+                    SELECT id, fact_text, embedding
+                    FROM memory_facts
+                    WHERE is_active = 1
+                      AND embedding IS NOT NULL
+                      AND scope = 'user'
+                      AND user_id = ?
+                    """,
+                    (user_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, fact_text, embedding
+                    FROM memory_facts
+                    WHERE is_active = 1
+                      AND embedding IS NOT NULL
+                      AND scope = 'chat'
+                      AND chat_id = ?
+                    """,
+                    (chat_id,),
+                ).fetchall()
+
+        results = []
+        for row in rows:
+            try:
+                fact_id, fact_text, emb_str = row
+                fact_embedding = json.loads(emb_str)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            similarity = _cosine_similarity(fact_embedding, query_embedding)
+            if similarity is None or similarity < min_semantic:
+                continue
+            results.append(
+                {
+                    "fact_id": fact_id,
+                    "fact_text": fact_text,
+                    "similarity": similarity,
+                }
+            )
+        results.sort(key=lambda item: item["similarity"], reverse=True)
+        return results[:limit]
+
     def _upsert_facts(
         self,
         scope: str,
@@ -134,6 +196,61 @@ class UserMemory:
                 confidence = _clamp01(item.get("confidence", 0.8))
                 embedding = item.get("embedding")
                 emb_json = json.dumps(embedding) if embedding else None
+                action = str(item.get("action", "keep_add_new")).strip().lower()
+                target_fact_id = item.get("target_fact_id")
+                try:
+                    target_fact_id = int(target_fact_id) if target_fact_id is not None else None
+                except (TypeError, ValueError):
+                    target_fact_id = None
+
+                if action == "noop":
+                    continue
+
+                if action in {"update_existing", "deactivate_existing"} and target_fact_id is not None:
+                    target_exists = conn.execute(
+                        """
+                        SELECT id
+                        FROM memory_facts
+                        WHERE id = ?
+                          AND scope = ?
+                          AND COALESCE(user_id, -1) = COALESCE(?, -1)
+                          AND COALESCE(chat_id, -1) = COALESCE(?, -1)
+                        """,
+                        (target_fact_id, scope, user_id, chat_id),
+                    ).fetchone()
+                    if target_exists:
+                        if action == "deactivate_existing":
+                            conn.execute(
+                                """
+                                UPDATE memory_facts
+                                SET is_active = 0,
+                                    updated_at = ?
+                                WHERE id = ?
+                                """,
+                                (now, target_fact_id),
+                            )
+                            continue
+                        conn.execute(
+                            """
+                            UPDATE memory_facts
+                            SET fact_text = ?,
+                                embedding = COALESCE(?, embedding),
+                                importance = ?,
+                                confidence = ?,
+                                is_active = 1,
+                                updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                fact_text,
+                                emb_json,
+                                importance,
+                                confidence,
+                                now,
+                                target_fact_id,
+                            ),
+                        )
+                        continue
 
                 existing = conn.execute(
                     """

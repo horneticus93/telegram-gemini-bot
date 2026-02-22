@@ -214,3 +214,119 @@ def test_search_facts_uses_recency_and_importance(mem):
     assert mem.search_profiles_by_embedding([1.0, 0.0]) == []
 
 
+def test_find_similar_facts_returns_ranked_candidates(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice plans to install 5 kW solar panels.",
+                "importance": 0.9,
+                "confidence": 0.9,
+                "embedding": [1.0, 0.0],
+            },
+            {
+                "fact": "Alice prefers concise replies.",
+                "importance": 0.5,
+                "confidence": 0.8,
+                "embedding": [0.0, 1.0],
+            },
+        ],
+    )
+    similar = mem.find_similar_facts(
+        scope="user",
+        user_id=1,
+        query_embedding=[0.95, 0.05],
+        limit=2,
+    )
+    assert len(similar) == 1
+    assert similar[0]["fact_text"] == "Alice plans to install 5 kW solar panels."
+
+
+def test_upsert_user_facts_updates_target_fact_without_duplicate(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice plans to install 5 kW solar panels.",
+                "importance": 0.7,
+                "confidence": 0.9,
+                "embedding": [1.0, 0.0],
+            }
+        ],
+    )
+    with sqlite3.connect(mem.db_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM memory_facts WHERE fact_text = ?",
+            ("Alice plans to install 5 kW solar panels.",),
+        ).fetchone()
+        assert row is not None
+        fact_id = row[0]
+
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice plans to install around 2.5 kW solar panels.",
+                "importance": 0.8,
+                "confidence": 0.95,
+                "embedding": [0.98, 0.02],
+                "action": "update_existing",
+                "target_fact_id": fact_id,
+            }
+        ],
+    )
+    facts = mem.get_user_facts(user_id=1, limit=10)
+    assert "Alice plans to install around 2.5 kW solar panels." in facts
+    assert "Alice plans to install 5 kW solar panels." not in facts
+    with sqlite3.connect(mem.db_path) as conn:
+        count = conn.execute(
+            """
+            SELECT COUNT(*) FROM memory_facts
+            WHERE scope = 'user' AND user_id = ? AND is_active = 1
+            """,
+            (1,),
+        ).fetchone()[0]
+    assert count == 1
+
+
+def test_upsert_user_facts_deactivates_target_fact(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice wants to move next month.",
+                "importance": 0.6,
+                "confidence": 0.7,
+                "embedding": [0.5, 0.5],
+            }
+        ],
+    )
+    with sqlite3.connect(mem.db_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM memory_facts WHERE fact_text = ?",
+            ("Alice wants to move next month.",),
+        ).fetchone()
+        assert row is not None
+        fact_id = row[0]
+
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice wants to move next month.",
+                "action": "deactivate_existing",
+                "target_fact_id": fact_id,
+            }
+        ],
+    )
+    assert mem.get_user_facts(user_id=1, limit=10) == []
+
+
