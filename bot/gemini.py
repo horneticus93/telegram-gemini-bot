@@ -207,6 +207,86 @@ class GeminiClient:
         except (json.JSONDecodeError, TypeError, ValueError):
             return []
 
+    def decide_fact_action(
+        self,
+        candidate_fact: str,
+        scope: str,
+        similar_facts: list[dict],
+        user_name: str,
+    ) -> dict:
+        if scope not in {"user", "chat"} or not candidate_fact.strip() or not similar_facts:
+            return {"action": "keep_add_new", "target_fact_id": None}
+
+        facts_block = "\n".join(
+            (
+                f"- id={item.get('fact_id')} "
+                f"score={float(item.get('similarity', 0.0)):.3f} "
+                f"text={item.get('fact_text', '')}"
+            )
+            for item in similar_facts
+        )
+        prompt = (
+            f"You are deciding how to store a memory fact for user '{user_name}'.\n\n"
+            f"New candidate fact (scope={scope}): {candidate_fact}\n\n"
+            f"Most similar existing facts:\n{facts_block}\n\n"
+            "Return ONLY one JSON object with exactly this shape:\n"
+            '{"action":"keep_add_new|update_existing|deactivate_existing|noop","target_fact_id":<number|null>}\n\n'
+            "Rules:\n"
+            "1. Use update_existing when the candidate corrects or refines the same underlying attribute as an existing fact.\n"
+            "2. Use deactivate_existing when an existing fact became invalid and the candidate should not replace it.\n"
+            "3. Use keep_add_new when candidate is a distinct stable fact.\n"
+            "4. Use noop when candidate should not be stored in long-term memory.\n"
+            "5. For update_existing/deactivate_existing, target_fact_id must be one of the listed ids.\n"
+            "6. No explanations, no markdown."
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a strict memory conflict resolver. "
+                    "Output valid JSON only."
+                ),
+            ),
+        )
+        text = (response.text or "").strip()
+        if not text:
+            return {"action": "keep_add_new", "target_fact_id": None}
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                return {"action": "keep_add_new", "target_fact_id": None}
+            action = str(data.get("action", "keep_add_new")).strip().lower()
+            if action not in {
+                "keep_add_new",
+                "update_existing",
+                "deactivate_existing",
+                "noop",
+            }:
+                action = "keep_add_new"
+            target_fact_id = data.get("target_fact_id")
+            try:
+                target_fact_id = int(target_fact_id) if target_fact_id is not None else None
+            except (TypeError, ValueError):
+                target_fact_id = None
+            valid_ids = {
+                int(item["fact_id"])
+                for item in similar_facts
+                if item.get("fact_id") is not None
+            }
+            if action in {"update_existing", "deactivate_existing"} and target_fact_id not in valid_ids:
+                return {"action": "keep_add_new", "target_fact_id": None}
+            if action in {"keep_add_new", "noop"}:
+                target_fact_id = None
+            return {"action": action, "target_fact_id": target_fact_id}
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError):
+            return {"action": "keep_add_new", "target_fact_id": None}
+
     def embed_text(self, text: str) -> list[float]:
         """Generate an embedding vector for the given text."""
         if not text:

@@ -258,6 +258,45 @@ def test_extract_facts_falls_back_to_empty_list_on_invalid_json(mock_client_cls)
     )
     assert facts == []
 
+@patch("bot.gemini.genai.Client")
+def test_decide_fact_action_returns_update_for_valid_target(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"action":"update_existing","target_fact_id":11}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    decision = client.decide_fact_action(
+        candidate_fact="Alice plans around 2.5 kW solar panels.",
+        scope="user",
+        similar_facts=[
+            {"fact_id": 11, "fact_text": "Alice plans 5 kW solar panels.", "similarity": 0.93}
+        ],
+        user_name="Alice",
+    )
+    assert decision == {"action": "update_existing", "target_fact_id": 11}
+
+
+@patch("bot.gemini.genai.Client")
+def test_decide_fact_action_falls_back_when_target_not_in_candidates(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.text = '{"action":"update_existing","target_fact_id":999}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    client = GeminiClient(api_key="fake-key")
+    decision = client.decide_fact_action(
+        candidate_fact="Alice plans around 2.5 kW solar panels.",
+        scope="user",
+        similar_facts=[
+            {"fact_id": 11, "fact_text": "Alice plans 5 kW solar panels.", "similarity": 0.93}
+        ],
+        user_name="Alice",
+    )
+    assert decision == {"action": "keep_add_new", "target_fact_id": None}
+
 
 def test_system_prompt_requires_optional_memory_usage():
     assert "ONLY when they are relevant" in SYSTEM_PROMPT

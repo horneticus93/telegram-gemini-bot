@@ -94,6 +94,9 @@ Use this mental model when changing `bot/handlers.py`:
   - semantic threshold,
   - recency/importance reranking,
   - cooldown to avoid repetitive fact injection.
+- Fact writes support conflict resolution for near-duplicate facts:
+  - resolve against top-K semantically similar existing facts (same owner/scope),
+  - then choose deterministic action (`keep_add_new`, `update_existing`, `deactivate_existing`, `noop`).
 
 ## SQLite Tables and Their Functions
 
