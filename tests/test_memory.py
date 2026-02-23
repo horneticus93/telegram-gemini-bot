@@ -330,3 +330,131 @@ def test_upsert_user_facts_deactivates_target_fact(mem):
     assert mem.get_user_facts(user_id=1, limit=10) == []
 
 
+def test_get_user_facts_page_returns_paginated_results(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    # Insert 7 facts
+    for i in range(7):
+        mem.upsert_user_facts(
+            user_id=1,
+            chat_id=100,
+            facts=[{"fact": f"Fact number {i}", "importance": 0.5, "confidence": 0.8}],
+        )
+
+    # Page 0 should have 5 facts (default page_size)
+    facts_p0, total = mem.get_user_facts_page(user_id=1, page=0)
+    assert total == 7
+    assert len(facts_p0) == 5
+    assert all("id" in f and "fact_text" in f for f in facts_p0)
+
+    # Page 1 should have 2 facts
+    facts_p1, total = mem.get_user_facts_page(user_id=1, page=1)
+    assert total == 7
+    assert len(facts_p1) == 2
+
+    # Page 2 should be empty
+    facts_p2, _ = mem.get_user_facts_page(user_id=1, page=2)
+    assert facts_p2 == []
+
+    # No overlap between pages
+    ids_p0 = {f["id"] for f in facts_p0}
+    ids_p1 = {f["id"] for f in facts_p1}
+    assert ids_p0.isdisjoint(ids_p1)
+
+
+def test_get_user_facts_page_empty_user(mem):
+    facts, total = mem.get_user_facts_page(user_id=999, page=0)
+    assert facts == []
+    assert total == 0
+
+
+def test_delete_fact_removes_fact(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[{"fact": "Alice likes tea", "importance": 0.5, "confidence": 0.8}],
+    )
+    facts, _ = mem.get_user_facts_page(user_id=1, page=0)
+    assert len(facts) == 1
+    fact_id = facts[0]["id"]
+
+    result = mem.delete_fact(fact_id=fact_id, user_id=1)
+    assert result is True
+
+    facts_after, total = mem.get_user_facts_page(user_id=1, page=0)
+    assert total == 0
+    assert facts_after == []
+
+
+def test_delete_fact_wrong_user_returns_false(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.increment_message_count(2, 100, "bob", "Bob")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[{"fact": "Alice likes coffee", "importance": 0.5, "confidence": 0.8}],
+    )
+    facts, _ = mem.get_user_facts_page(user_id=1, page=0)
+    fact_id = facts[0]["id"]
+
+    # User 2 should not be able to delete user 1's fact
+    result = mem.delete_fact(fact_id=fact_id, user_id=2)
+    assert result is False
+
+    # Fact should still exist
+    facts_after, total = mem.get_user_facts_page(user_id=1, page=0)
+    assert total == 1
+
+
+def test_delete_fact_nonexistent_returns_false(mem):
+    result = mem.delete_fact(fact_id=99999, user_id=1)
+    assert result is False
+
+
+def test_update_fact_text_changes_text_and_clears_embedding(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[
+            {
+                "fact": "Alice likes apples",
+                "importance": 0.5,
+                "confidence": 0.8,
+                "embedding": [1.0, 0.0],
+            }
+        ],
+    )
+    facts, _ = mem.get_user_facts_page(user_id=1, page=0)
+    fact_id = facts[0]["id"]
+
+    result = mem.update_fact_text(fact_id=fact_id, user_id=1, new_text="Alice prefers oranges")
+    assert result is True
+
+    facts_after, _ = mem.get_user_facts_page(user_id=1, page=0)
+    assert facts_after[0]["fact_text"] == "Alice prefers oranges"
+
+    # Verify embedding was cleared
+    with sqlite3.connect(mem.db_path) as conn:
+        row = conn.execute(
+            "SELECT embedding FROM memory_facts WHERE id = ?", (fact_id,)
+        ).fetchone()
+        assert row[0] is None
+
+
+def test_update_fact_text_wrong_user_returns_false(mem):
+    mem.increment_message_count(1, 100, "alice", "Alice")
+    mem.upsert_user_facts(
+        user_id=1,
+        chat_id=100,
+        facts=[{"fact": "Alice likes cats", "importance": 0.5, "confidence": 0.8}],
+    )
+    facts, _ = mem.get_user_facts_page(user_id=1, page=0)
+    fact_id = facts[0]["id"]
+
+    result = mem.update_fact_text(fact_id=fact_id, user_id=2, new_text="Hacked")
+    assert result is False
+
+    # Original text should remain
+    facts_after, _ = mem.get_user_facts_page(user_id=1, page=0)
+    assert facts_after[0]["fact_text"] == "Alice likes cats"
