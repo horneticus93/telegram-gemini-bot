@@ -48,6 +48,15 @@ If you edit code here, follow these project-specific rules before generic habits
 
 Do not break this control flow without updating tests accordingly.
 
+## Memory Management UI
+
+The bot provides an interactive inline keyboard UI for managing stored user facts, implemented in `bot/memory_handlers.py`:
+- The `/memory` command triggers the UI.
+  - In private chats: `/memory [user_id]` targets a specific user.
+  - In group chats: `user_id` arguments are ignored (always targets the sender).
+- **Callback Routing**: Inline buttons use a prefix scheme (`mem:list:{page}`, `mem:view:{id}`, `mem:del:{id}`, `mem:edit:{id}`).
+- **Edit Flow**: When "Edit" is tapped, state is stored in `_pending_edits` dict. The `handle_memory_edit_reply` message handler intercepts the user's next text message and consumes it as the new fact text, bypassing the normal chat flow.
+
 ## Chat Interaction Logic (Detailed)
 
 Use this mental model when changing `bot/handlers.py`:
