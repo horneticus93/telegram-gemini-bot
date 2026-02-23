@@ -48,6 +48,15 @@ If you edit code here, follow these project-specific rules before generic habits
 
 Do not break this control flow without updating tests accordingly.
 
+## Memory Management UI
+
+The bot provides an interactive inline keyboard UI for managing stored user facts, implemented in `bot/memory_handlers.py`:
+- The `/memory` command triggers the UI.
+  - In private chats: `/memory [user_id]` targets a specific user.
+  - In group chats: `user_id` arguments are ignored (always targets the sender).
+- **Callback Routing**: Inline buttons use a prefix scheme (`mem:list:{page}`, `mem:view:{id}`, `mem:del:{id}`, `mem:edit:{id}`).
+- **Edit Flow**: When "Edit" is tapped, state is stored in `_pending_edits` dict. The `handle_memory_edit_reply` message handler intercepts the user's next text message and consumes it as the new fact text, bypassing the normal chat flow.
+
 ## Chat Interaction Logic (Detailed)
 
 Use this mental model when changing `bot/handlers.py`:
@@ -209,6 +218,21 @@ If behavior changes in routing/memory flags/RAG injection, update or add tests i
 - Any newly added functionality must be covered by tests in `tests/`.
 - After each code change, run relevant tests and ensure existing tests still pass.
 - If existing tests fail due to your change, do not ignore them: update/fix implementation and/or tests so the suite is green again.
+
+## AI Development Pipeline
+
+For structured feature development, use the `/develop` workflow which orchestrates 5 skills in sequence:
+
+1. **Specification** (`.agents/skills/specification/SKILL.md`) — non-technical spec from user request
+2. **Plan** (`.agents/skills/plan/SKILL.md`) — detailed task-by-task implementation plan
+3. **Implementation** (`.agents/skills/implementation/SKILL.md`) — code + tests, task by task
+4. **Review** (`.agents/skills/review/SKILL.md`) — independent code review with verdict
+5. **Testing** (`.agents/skills/testing/SKILL.md`) — comprehensive tests + full suite verification
+
+Pipeline orchestrator: `.agents/orchestrator.md`
+Workflow entry point: `.agents/workflows/develop.md`
+
+Use `/develop` for any non-trivial feature. For small fixes, follow the standard Code Change Guidelines above.
 
 ## Completion Checklist
 

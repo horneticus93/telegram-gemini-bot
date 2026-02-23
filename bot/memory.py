@@ -332,6 +332,75 @@ class UserMemory:
             ).fetchall()
         return [row[0] for row in rows]
 
+    def get_user_facts_page(
+        self, user_id: int, page: int = 0, page_size: int = 5
+    ) -> tuple[list[dict], int]:
+        """Return a page of active user-scope facts and total count.
+
+        Returns:
+            Tuple of (facts, total_count) where each fact is
+            ``{"id": int, "fact_text": str}``.
+        """
+        offset = page * page_size
+        with sqlite3.connect(self.db_path) as conn:
+            total = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM memory_facts
+                WHERE scope = 'user'
+                  AND user_id = ?
+                  AND is_active = 1
+                """,
+                (user_id,),
+            ).fetchone()[0]
+            rows = conn.execute(
+                """
+                SELECT id, fact_text
+                FROM memory_facts
+                WHERE scope = 'user'
+                  AND user_id = ?
+                  AND is_active = 1
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (user_id, page_size, offset),
+            ).fetchall()
+        facts = [{"id": row[0], "fact_text": row[1]} for row in rows]
+        return facts, total
+
+    def delete_fact(self, fact_id: int, user_id: int) -> bool:
+        """Delete a user-scope fact by ID. Returns True if a row was deleted."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM memory_facts
+                WHERE id = ?
+                  AND user_id = ?
+                  AND scope = 'user'
+                """,
+                (fact_id, user_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_fact_text(self, fact_id: int, user_id: int, new_text: str) -> bool:
+        """Update fact text and clear its embedding. Returns True if updated."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE memory_facts
+                SET fact_text = ?,
+                    embedding = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND user_id = ?
+                  AND scope = 'user'
+                """,
+                (new_text, _now_iso(), fact_id, user_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def search_facts_by_embedding(
         self,
         query_embedding: list[float],
