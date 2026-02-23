@@ -77,8 +77,6 @@ async def handle_memory_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     chat_id = update.effective_chat.id
-    if chat_id not in ALLOWED_CHAT_IDS:
-        return
 
     if update.effective_chat.type != "private":
         await update.message.reply_text(
