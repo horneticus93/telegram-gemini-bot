@@ -63,13 +63,12 @@ async def test_memory_command_shows_facts():
     update = make_update()
     context = make_context()
 
-    with patch("bot.memory_handlers.ALLOWED_CHAT_IDS", {1}):
-        with patch("bot.memory_handlers.user_memory") as mock_memory:
-            mock_memory.get_user_facts_page.return_value = (
-                [{"id": 42, "fact_text": "Alice likes testing"}],
-                1,
-            )
-            await handle_memory_command(update, context)
+    with patch("bot.memory_handlers.user_memory") as mock_memory:
+        mock_memory.get_user_facts_page.return_value = (
+            [{"id": 42, "fact_text": "Alice likes testing"}],
+            1,
+        )
+        await handle_memory_command(update, context)
 
     update.message.reply_text.assert_called_once()
     args, kwargs = update.message.reply_text.call_args
@@ -87,10 +86,9 @@ async def test_memory_command_no_facts():
     update = make_update()
     context = make_context()
 
-    with patch("bot.memory_handlers.ALLOWED_CHAT_IDS", {1}):
-        with patch("bot.memory_handlers.user_memory") as mock_memory:
-            mock_memory.get_user_facts_page.return_value = ([], 0)
-            await handle_memory_command(update, context)
+    with patch("bot.memory_handlers.user_memory") as mock_memory:
+        mock_memory.get_user_facts_page.return_value = ([], 0)
+        await handle_memory_command(update, context)
 
     update.message.reply_text.assert_called_once()
     args, kwargs = update.message.reply_text.call_args
@@ -106,10 +104,9 @@ async def test_memory_command_private_chat_user_id_override():
     update = make_update(chat_type="private")
     context = make_context(args=["20"])
 
-    with patch("bot.memory_handlers.ALLOWED_CHAT_IDS", {1}):
-        with patch("bot.memory_handlers.user_memory") as mock_memory:
-            mock_memory.get_user_facts_page.return_value = ([], 0)
-            await handle_memory_command(update, context)
+    with patch("bot.memory_handlers.user_memory") as mock_memory:
+        mock_memory.get_user_facts_page.return_value = ([], 0)
+        await handle_memory_command(update, context)
 
     mock_memory.get_user_facts_page.assert_called_once_with(20, page=0)
 
@@ -122,9 +119,8 @@ async def test_memory_command_group_chat_blocked():
     update = make_update(chat_type="supergroup", chat_id=200)
     context = make_context()
 
-    with patch("bot.memory_handlers.ALLOWED_CHAT_IDS", {200}):
-        with patch("bot.memory_handlers.user_memory") as mock_memory:
-            await handle_memory_command(update, context)
+    with patch("bot.memory_handlers.user_memory") as mock_memory:
+        await handle_memory_command(update, context)
 
     # Should block and ask to use direct messages
     mock_memory.get_user_facts_page.assert_not_called()
