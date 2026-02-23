@@ -210,6 +210,21 @@ If behavior changes in routing/memory flags/RAG injection, update or add tests i
 - After each code change, run relevant tests and ensure existing tests still pass.
 - If existing tests fail due to your change, do not ignore them: update/fix implementation and/or tests so the suite is green again.
 
+## AI Development Pipeline
+
+For structured feature development, use the `/develop` workflow which orchestrates 5 skills in sequence:
+
+1. **Specification** (`.agents/skills/specification/SKILL.md`) — non-technical spec from user request
+2. **Plan** (`.agents/skills/plan/SKILL.md`) — detailed task-by-task implementation plan
+3. **Implementation** (`.agents/skills/implementation/SKILL.md`) — code + tests, task by task
+4. **Review** (`.agents/skills/review/SKILL.md`) — independent code review with verdict
+5. **Testing** (`.agents/skills/testing/SKILL.md`) — comprehensive tests + full suite verification
+
+Pipeline orchestrator: `.agents/orchestrator.md`
+Workflow entry point: `.agents/workflows/develop.md`
+
+Use `/develop` for any non-trivial feature. For small fixes, follow the standard Code Change Guidelines above.
+
 ## Completion Checklist
 
 Before declaring task done:
