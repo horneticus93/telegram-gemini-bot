@@ -1,6 +1,8 @@
 import os
+import re
 import asyncio
 import logging
+from collections import OrderedDict
 from telegram import Update
 from telegram.ext import ContextTypes
 from .session import SessionManager
@@ -100,9 +102,23 @@ class _LazyGeminiClient:
         event_type: str,
         persons: list[dict],
         person_facts: dict[str, list[str]],
+        titles: list[str] | None = None,
     ) -> str:
         return self._get().generate_congratulation(
             event_type=event_type, persons=persons, person_facts=person_facts,
+            titles=titles,
+        )
+
+    def analyze_reaction(
+        self,
+        bot_message: str,
+        reaction_emoji: str,
+        recent_history: str,
+    ) -> dict:
+        return self._get().analyze_reaction(
+            bot_message=bot_message,
+            reaction_emoji=reaction_emoji,
+            recent_history=recent_history,
         )
 
     def generate_engagement(
@@ -125,6 +141,24 @@ class _LazyGeminiClient:
         )
 
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
+
+_BOT_MESSAGES_PER_CHAT = 50
+_bot_messages: dict[int, OrderedDict[int, str]] = {}
+
+
+def _track_bot_message(chat_id: int, message_id: int, text: str) -> None:
+    """Store a bot message for later reaction lookups, capped per chat."""
+    if chat_id not in _bot_messages:
+        _bot_messages[chat_id] = OrderedDict()
+    store = _bot_messages[chat_id]
+    store[message_id] = text
+    while len(store) > _BOT_MESSAGES_PER_CHAT:
+        store.popitem(last=False)
+
+
+def _get_bot_message(chat_id: int, message_id: int) -> str | None:
+    """Retrieve tracked bot message text, or None if not tracked."""
+    return _bot_messages.get(chat_id, {}).get(message_id)
 
 
 async def _update_user_profile(
@@ -197,8 +231,18 @@ async def _update_user_profile(
                 continue
             date_info = gemini_client.extract_date_from_fact(fact_text)
             if date_info:
+                if item.get("scope") == "chat":
+                    target_user_id = None
+                else:
+                    # Try to find the target user ID from the fact text.
+                    # Facts reference users as "Name [ID: 123]", so extract
+                    # the ID of the person the date belongs to.
+                    target_user_id = user_id
+                    id_match = re.search(r"\[ID:\s*(\d+)\]", fact_text)
+                    if id_match:
+                        target_user_id = int(id_match.group(1))
                 user_memory.upsert_scheduled_event(
-                    user_id=user_id,
+                    user_id=target_user_id,
                     chat_id=chat_id,
                     event_type=date_info["event_type"],
                     event_date=date_info["event_date"],
@@ -301,10 +345,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _update_user_profile(user.id, chat_id, author)
 
         if len(response) <= 4096:
-            await update.message.reply_text(response)
+            sent = await update.message.reply_text(response)
+            _track_bot_message(chat_id, sent.message_id, response)
         else:
             for i in range(0, len(response), 4096):
-                await update.message.reply_text(response[i : i + 4096])
+                sent = await update.message.reply_text(response[i : i + 4096])
+                _track_bot_message(chat_id, sent.message_id, response[i : i + 4096])
     except Exception:
         typing_task.cancel()
         logger.exception("Gemini API call failed")
@@ -322,3 +368,51 @@ def _format_fact_for_prompt(fact: dict) -> str:
     if owner_id is not None:
         return f"[user fact] {owner} [ID: {owner_id}]: {fact['fact_text']}"
     return f"[user fact] {owner}: {fact['fact_text']}"
+
+
+async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle emoji reactions on bot messages."""
+    reaction = update.message_reaction
+    if not reaction:
+        return
+
+    chat_id = reaction.chat.id
+    if chat_id not in ALLOWED_CHAT_IDS:
+        return
+
+    message_id = reaction.message_id
+    bot_message = _get_bot_message(chat_id, message_id)
+    if bot_message is None:
+        return
+
+    # Extract new emoji reactions
+    new_reactions = reaction.new_reaction
+    if not new_reactions:
+        return
+
+    emojis = []
+    for r in new_reactions:
+        emoji = getattr(r, "emoji", None)
+        if emoji:
+            emojis.append(emoji)
+    if not emojis:
+        return
+
+    reaction_emoji = " ".join(emojis)
+    recent_history = session_manager.format_history(chat_id)
+
+    try:
+        result = await asyncio.to_thread(
+            gemini_client.analyze_reaction,
+            bot_message=bot_message,
+            reaction_emoji=reaction_emoji,
+            recent_history=recent_history,
+        )
+        if result.get("should_respond") and result.get("response"):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=result["response"],
+                reply_to_message_id=message_id,
+            )
+    except Exception:
+        logger.exception("Failed to analyze reaction")

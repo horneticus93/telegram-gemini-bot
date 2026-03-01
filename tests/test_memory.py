@@ -485,6 +485,7 @@ def test_upsert_scheduled_event_creates_new(mem):
 
 
 def test_upsert_scheduled_event_updates_existing(mem):
+    """Same (user_id, chat_id, event_type, title) updates the date."""
     mem.upsert_scheduled_event(
         user_id=1,
         chat_id=100,
@@ -492,23 +493,38 @@ def test_upsert_scheduled_event_updates_existing(mem):
         event_date="03-15",
         title="Alice's birthday",
     )
-    # Same (user_id, chat_id, event_type) but different date and title
+    # Same title — should update the date
     mem.upsert_scheduled_event(
         user_id=1,
         chat_id=100,
         event_type="birthday",
         event_date="04-20",
-        title="Alice's birthday (corrected)",
+        title="Alice's birthday",
     )
-    # Old date should return nothing
     old_events = mem.get_events_for_date("03-15")
     assert len(old_events) == 0
 
-    # New date should have the updated event
     new_events = mem.get_events_for_date("04-20")
     assert len(new_events) == 1
-    assert new_events[0]["title"] == "Alice's birthday (corrected)"
     assert new_events[0]["event_date"] == "04-20"
+
+
+def test_upsert_scheduled_event_different_users_not_overwritten(mem):
+    """Events for different users don't overwrite each other."""
+    mem.upsert_scheduled_event(
+        user_id=1, chat_id=100, event_type="birthday",
+        event_date="03-10", title="Alice's birthday",
+    )
+    mem.upsert_scheduled_event(
+        user_id=2, chat_id=100, event_type="birthday",
+        event_date="03-15", title="Bob's birthday",
+    )
+    all_march_10 = mem.get_events_for_date("03-10")
+    all_march_15 = mem.get_events_for_date("03-15")
+    assert len(all_march_10) == 1
+    assert all_march_10[0]["user_id"] == 1
+    assert len(all_march_15) == 1
+    assert all_march_15[0]["user_id"] == 2
 
 
 def test_get_events_for_date_filters_inactive(mem):

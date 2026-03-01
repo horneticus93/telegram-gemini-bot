@@ -43,12 +43,34 @@ def test_full_date_flow(integration_memory):
     events_after = mem.get_events_for_date("03-10")
     assert events_after[0]["last_triggered"] is not None
 
-    # Update same event (user birthday corrected)
+    # Update same event (date corrected, same title matches dedup key)
     mem.upsert_scheduled_event(
         user_id=1, chat_id=-100, event_type="birthday",
-        event_date="03-15", title="Oleksandr's birthday (corrected)",
+        event_date="03-15", title="Oleksandr's birthday",
     )
     old = mem.get_events_for_date("03-10")
     new = mem.get_events_for_date("03-15")
     assert len(old) == 0
     assert len(new) == 1
+
+
+def test_chat_level_event_flow(integration_memory):
+    """End-to-end: chat-wide event with user_id=None."""
+    mem = integration_memory
+
+    # Upsert a chat-wide holiday event
+    mem.upsert_scheduled_event(
+        user_id=None, chat_id=-100, event_type="holiday",
+        event_date="03-08", title="International Women's Day",
+    )
+
+    events = mem.get_events_for_date("03-08")
+    assert len(events) == 1
+    assert events[0]["user_id"] is None
+    assert events[0]["title"] == "International Women's Day"
+    assert events[0]["event_type"] == "holiday"
+
+    # Mark triggered and verify
+    mem.mark_event_triggered(events[0]["id"])
+    events_after = mem.get_events_for_date("03-08")
+    assert events_after[0]["last_triggered"] is not None
