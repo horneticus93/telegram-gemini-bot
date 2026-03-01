@@ -533,6 +533,81 @@ class UserMemory:
             ).fetchall()
             return [(row[0], row[1]) for row in rows]
 
+    def upsert_scheduled_event(
+        self,
+        user_id: int | None,
+        chat_id: int,
+        event_type: str,
+        event_date: str,
+        title: str,
+        source_fact_id: int | None = None,
+    ) -> None:
+        now = _now_iso()
+        with sqlite3.connect(self.db_path) as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM scheduled_events
+                WHERE COALESCE(user_id, -1) = COALESCE(?, -1)
+                  AND chat_id = ?
+                  AND event_type = ?
+                  AND is_active = 1
+                """,
+                (user_id, chat_id, event_type),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE scheduled_events
+                    SET event_date = ?,
+                        title = ?,
+                        source_fact_id = COALESCE(?, source_fact_id),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (event_date, title, source_fact_id, now, existing[0]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO scheduled_events
+                        (user_id, chat_id, event_type, event_date, title,
+                         source_fact_id, last_triggered, is_active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+                    """,
+                    (user_id, chat_id, event_type, event_date, title,
+                     source_fact_id, now, now),
+                )
+            conn.commit()
+
+    def get_events_for_date(self, date_mmdd: str) -> list[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT id, user_id, chat_id, event_type, event_date,
+                       title, source_fact_id, last_triggered
+                FROM scheduled_events
+                WHERE is_active = 1
+                  AND (event_date = ? OR event_date LIKE ?)
+                ORDER BY chat_id, event_type
+                """,
+                (date_mmdd, f"%-{date_mmdd}"),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_event_triggered(self, event_id: int) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE scheduled_events
+                SET last_triggered = ?
+                WHERE id = ?
+                """,
+                (_now_iso(), event_id),
+            )
+            conn.commit()
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
