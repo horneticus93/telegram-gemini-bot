@@ -57,6 +57,22 @@ The bot provides an interactive inline keyboard UI for managing stored user fact
 - **Callback Routing**: Inline buttons use a prefix scheme (`mem:list:{page}`, `mem:view:{id}`, `mem:del:{id}`, `mem:edit:{id}`).
 - **Edit Flow**: When "Edit" is tapped, state is stored in `_pending_edits` dict. The `handle_memory_edit_reply` message handler intercepts the user's next text message and consumes it as the new fact text, bypassing the normal chat flow.
 
+## Proactive Messaging System
+
+The bot can send messages on its own initiative via `bot/scheduler.py`:
+
+- **Date congratulations**: Daily 09:00 check of `scheduled_events` table. Grouped by chat+event_type. Supports chat-wide events (`user_id=None`) for holidays. Event titles are passed to the congratulation generator.
+- **Engagement**: 1-2 times/day at random times. Gemini generates discussion starters or personal questions.
+- **Silence breaker**: After 5-10 min of no messages, 50% chance the bot responds naturally.
+- **Reaction handling**: Bot tracks its sent messages and responds to negative emoji reactions (thumbs down, angry face, etc.) via `handle_reaction` handler registered as `MessageReactionHandler`.
+
+Controlled by `PROACTIVE_ENABLED` env var (default: false). Jobs registered via `JobQueue` in `bot/main.py`.
+
+Safety: daily limit per chat, night mode (23:00-08:00), date deduplication via `last_triggered`.
+
+New files: `bot/scheduler.py`, `tests/test_scheduler.py`.
+New table: `scheduled_events` (Alembic migration `a1b2c3d4e5f6`, extended by `c3d4e5f6a7b8` to add `holiday` event type).
+
 ## Chat Interaction Logic (Detailed)
 
 Use this mental model when changing `bot/handlers.py`:

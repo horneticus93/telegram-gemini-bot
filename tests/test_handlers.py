@@ -252,6 +252,51 @@ async def test_memory_not_injected_when_no_relevant_facts():
 
 
 @pytest.mark.asyncio
+async def test_date_extraction_runs_after_fact_upsert():
+    """When facts are upserted, extract_date_from_fact is called for each."""
+    from bot.handlers import handle_message
+
+    ALLOWED_CHAT_ID = 500
+    update = make_update("@testbot my birthday is March 10", chat_id=ALLOWED_CHAT_ID, first_name="Oleksandr")
+    update.message.from_user.id = 200
+    update.message.chat.type = "private"
+    context = make_context(bot_username="testbot")
+
+    with (
+        patch("bot.handlers.gemini_client") as mock_gemini,
+        patch("bot.handlers.user_memory") as mock_memory,
+        patch("bot.handlers.session_manager"),
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+        patch("bot.handlers.MEMORY_UPDATE_INTERVAL", 1),
+    ):
+        mock_memory.increment_message_count.return_value = 1
+        mock_memory.get_profile.return_value = ""
+        mock_memory.get_user_facts.return_value = []
+        mock_memory.get_chat_members.return_value = []
+        mock_memory.search_facts_by_embedding.return_value = []
+        mock_memory.find_similar_facts.return_value = []
+
+        mock_gemini.extract_facts.return_value = [
+            {"fact": "Oleksandr's birthday is March 10", "importance": 0.9, "confidence": 0.9, "scope": "user"},
+        ]
+        mock_gemini.embed_text.return_value = [0.1] * 768
+        mock_gemini.decide_fact_action.return_value = {"action": "keep_add_new", "target_fact_id": None}
+        mock_gemini.extract_date_from_fact.return_value = {
+            "event_type": "birthday", "event_date": "03-10", "title": "Oleksandr's birthday",
+        }
+        mock_gemini.ask.return_value = ("Got it!", False)
+
+        await handle_message(update, context)
+        # Wait for background task to complete
+        await asyncio.sleep(0.1)
+
+        mock_gemini.extract_date_from_fact.assert_called_once_with(
+            "Oleksandr's birthday is March 10"
+        )
+        mock_memory.upsert_scheduled_event.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_sends_typing_action():
     from bot.handlers import handle_message
     update = make_update("@testbot tell me a story", chat_id=123, first_name="Dave")
@@ -272,3 +317,211 @@ async def test_sends_typing_action():
 
     # Verify typing action was sent
     context.bot.send_chat_action.assert_called_with(chat_id=123, action="typing")
+
+
+@pytest.mark.asyncio
+async def test_silence_timer_reset_called_on_message():
+    """Each group message resets the silence timer."""
+    from bot.handlers import handle_message
+
+    ALLOWED_CHAT_ID = 600
+    update = make_update("just chatting", chat_id=ALLOWED_CHAT_ID)
+    update.message.chat.type = "group"
+    context = make_context()
+
+    with (
+        patch("bot.handlers.gemini_client"),
+        patch("bot.handlers.user_memory") as mock_memory,
+        patch("bot.handlers.session_manager"),
+        patch("bot.handlers.reset_silence_timer") as mock_reset,
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+    ):
+        mock_memory.increment_message_count.return_value = 1
+        await handle_message(update, context)
+        mock_reset.assert_called_once_with(context.job_queue, ALLOWED_CHAT_ID)
+
+
+@pytest.mark.asyncio
+async def test_chat_scope_fact_creates_event_with_user_id_none():
+    """A chat-scoped date fact should create an event with user_id=None."""
+    from bot.handlers import handle_message
+
+    ALLOWED_CHAT_ID = 700
+    update = make_update("@testbot congratulate everyone on March 8", chat_id=ALLOWED_CHAT_ID, first_name="Alice")
+    update.message.from_user.id = 300
+    update.message.chat.type = "private"
+    context = make_context(bot_username="testbot")
+
+    with (
+        patch("bot.handlers.gemini_client") as mock_gemini,
+        patch("bot.handlers.user_memory") as mock_memory,
+        patch("bot.handlers.session_manager"),
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+        patch("bot.handlers.MEMORY_UPDATE_INTERVAL", 1),
+    ):
+        mock_memory.increment_message_count.return_value = 1
+        mock_memory.get_profile.return_value = ""
+        mock_memory.get_user_facts.return_value = []
+        mock_memory.get_chat_members.return_value = []
+        mock_memory.search_facts_by_embedding.return_value = []
+        mock_memory.find_similar_facts.return_value = []
+
+        mock_gemini.extract_facts.return_value = [
+            {"fact": "Congratulate everyone on March 8", "importance": 0.9, "confidence": 0.9, "scope": "chat"},
+        ]
+        mock_gemini.embed_text.return_value = [0.1] * 768
+        mock_gemini.decide_fact_action.return_value = {"action": "keep_add_new", "target_fact_id": None}
+        mock_gemini.extract_date_from_fact.return_value = {
+            "event_type": "holiday", "event_date": "03-08", "title": "International Women's Day",
+        }
+        mock_gemini.ask.return_value = ("Got it!", False)
+
+        await handle_message(update, context)
+        await asyncio.sleep(0.1)
+
+        mock_memory.upsert_scheduled_event.assert_called_once_with(
+            user_id=None,
+            chat_id=ALLOWED_CHAT_ID,
+            event_type="holiday",
+            event_date="03-08",
+            title="International Women's Day",
+        )
+
+
+@pytest.mark.asyncio
+async def test_bot_message_tracking():
+    """Bot messages are tracked after reply_text."""
+    from bot.handlers import handle_message, _bot_messages
+
+    ALLOWED_CHAT_ID = 800
+    update = make_update("@testbot hello", chat_id=ALLOWED_CHAT_ID)
+    update.message.from_user.id = 400
+    update.message.chat.type = "private"
+    context = make_context(bot_username="testbot")
+
+    sent_message = MagicMock()
+    sent_message.message_id = 42
+    update.message.reply_text = AsyncMock(return_value=sent_message)
+
+    with (
+        patch("bot.handlers.gemini_client") as mock_gemini,
+        patch("bot.handlers.user_memory") as mock_memory,
+        patch("bot.handlers.session_manager"),
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+    ):
+        mock_memory.increment_message_count.return_value = 1
+        mock_memory.get_profile.return_value = ""
+        mock_memory.get_user_facts.return_value = []
+        mock_memory.get_chat_members.return_value = []
+        mock_memory.search_facts_by_embedding.return_value = []
+        mock_gemini.ask.return_value = ("Hi there!", False)
+
+        await handle_message(update, context)
+
+    assert _bot_messages.get(ALLOWED_CHAT_ID, {}).get(42) == "Hi there!"
+    # Cleanup
+    _bot_messages.pop(ALLOWED_CHAT_ID, None)
+
+
+@pytest.mark.asyncio
+async def test_handle_reaction_responds_to_negative():
+    """handle_reaction calls analyze_reaction and responds for negative reactions."""
+    from bot.handlers import handle_reaction, _track_bot_message, _bot_messages
+
+    ALLOWED_CHAT_ID = 900
+    _track_bot_message(ALLOWED_CHAT_ID, 55, "Here's my opinion.")
+
+    reaction_obj = MagicMock()
+    reaction_obj.emoji = "\U0001f44e"
+
+    update = MagicMock(spec=Update)
+    update.message_reaction = MagicMock()
+    update.message_reaction.chat.id = ALLOWED_CHAT_ID
+    update.message_reaction.message_id = 55
+    update.message_reaction.new_reaction = [reaction_obj]
+
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.bot = AsyncMock()
+
+    with (
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+        patch("bot.handlers.gemini_client") as mock_gemini,
+        patch("bot.handlers.session_manager") as mock_session,
+    ):
+        mock_session.format_history.return_value = ""
+        mock_gemini.analyze_reaction.return_value = {
+            "should_respond": True,
+            "response": "Tough crowd!",
+        }
+
+        await handle_reaction(update, context)
+
+    context.bot.send_message.assert_called_once_with(
+        chat_id=ALLOWED_CHAT_ID,
+        text="Tough crowd!",
+        reply_to_message_id=55,
+    )
+    # Cleanup
+    _bot_messages.pop(ALLOWED_CHAT_ID, None)
+
+
+@pytest.mark.asyncio
+async def test_handle_reaction_ignores_non_bot_message():
+    """handle_reaction ignores reactions on messages not tracked by the bot."""
+    from bot.handlers import handle_reaction
+
+    ALLOWED_CHAT_ID = 901
+
+    reaction_obj = MagicMock()
+    reaction_obj.emoji = "\U0001f44e"
+
+    update = MagicMock(spec=Update)
+    update.message_reaction = MagicMock()
+    update.message_reaction.chat.id = ALLOWED_CHAT_ID
+    update.message_reaction.message_id = 999  # not tracked
+    update.message_reaction.new_reaction = [reaction_obj]
+
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.bot = AsyncMock()
+
+    with patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}):
+        await handle_reaction(update, context)
+
+    context.bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_reaction_silent_for_positive():
+    """handle_reaction stays silent when analyze_reaction says not to respond."""
+    from bot.handlers import handle_reaction, _track_bot_message, _bot_messages
+
+    ALLOWED_CHAT_ID = 902
+    _track_bot_message(ALLOWED_CHAT_ID, 60, "Great answer.")
+
+    reaction_obj = MagicMock()
+    reaction_obj.emoji = "\U0001f44d"
+
+    update = MagicMock(spec=Update)
+    update.message_reaction = MagicMock()
+    update.message_reaction.chat.id = ALLOWED_CHAT_ID
+    update.message_reaction.message_id = 60
+    update.message_reaction.new_reaction = [reaction_obj]
+
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.bot = AsyncMock()
+
+    with (
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+        patch("bot.handlers.gemini_client") as mock_gemini,
+        patch("bot.handlers.session_manager") as mock_session,
+    ):
+        mock_session.format_history.return_value = ""
+        mock_gemini.analyze_reaction.return_value = {
+            "should_respond": False,
+            "response": "",
+        }
+
+        await handle_reaction(update, context)
+
+    context.bot.send_message.assert_not_called()
+    _bot_messages.pop(ALLOWED_CHAT_ID, None)

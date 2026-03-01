@@ -301,3 +301,222 @@ def test_decide_fact_action_falls_back_when_target_not_in_candidates(mock_client
 def test_system_prompt_requires_optional_memory_usage():
     assert "ONLY when they are relevant" in SYSTEM_PROMPT
     assert "Do not force these facts" in SYSTEM_PROMPT
+
+
+# --- GeminiClient.extract_date_from_fact() tests ---
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_returns_date(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"event_type":"birthday","event_date":"03-10","title":"Oleksandr\'s birthday"}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("Oleksandr's birthday is March 10")
+    assert result is not None
+    assert result["event_type"] == "birthday"
+    assert result["event_date"] == "03-10"
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_returns_none_for_no_date(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(text="null")
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("Oleksandr likes pizza")
+    assert result is None
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_handles_bad_json(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(text="not json")
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("some fact")
+    assert result is None
+
+
+# --- GeminiClient proactive content generation tests ---
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_congratulation(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="Happy birthday, Oleksandr! Hope your day is amazing!"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_congratulation(
+        event_type="birthday",
+        persons=[{"name": "Oleksandr", "user_id": 1, "username": "olex"}],
+        person_facts={"1": ["loves pizza", "works as developer"]},
+    )
+    assert isinstance(result, str)
+    assert len(result) > 10
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_engagement(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"message": "Hey everyone, what movie should we watch?", "target_user_id": null}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_engagement(
+        members=[{"name": "Oleksandr", "user_id": 1}],
+        member_facts={"1": ["loves sci-fi movies"]},
+        recent_history="Oleksandr: I watched Dune yesterday",
+    )
+    assert "message" in result
+    assert "target_user_id" in result
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_engagement_bad_json_fallback(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="Hey what is going on guys?"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_engagement(
+        members=[], member_facts={}, recent_history="",
+    )
+    assert result["message"] == "Hey what is going on guys?"
+    assert result["target_user_id"] is None
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_silence_response(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="That's an interesting point about AI, what do you think?"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_silence_response(
+        recent_messages=[{"author": "Oleksandr [ID: 1]", "text": "AI is getting crazy"}],
+        author_facts={"1": ["interested in technology"]},
+    )
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+# --- extract_date_from_fact holiday support tests ---
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_returns_holiday_type(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"event_type":"holiday","event_date":"03-08","title":"International Women\'s Day"}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("Congratulate everyone on March 8")
+    assert result is not None
+    assert result["event_type"] == "holiday"
+    assert result["event_date"] == "03-08"
+
+
+# --- generate_congratulation with empty persons (chat-wide) tests ---
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_congratulation_empty_persons(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="Happy Women's Day everyone! You're all amazing!"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_congratulation(
+        event_type="holiday",
+        persons=[],
+        person_facts={},
+        titles=["International Women's Day"],
+    )
+    assert isinstance(result, str)
+    assert len(result) > 0
+    # Verify prompt contains chat-wide marker
+    call_args = mock_client.models.generate_content.call_args
+    prompt = call_args.kwargs.get("contents") or call_args.args[0]
+    assert "chat-wide event" in prompt
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_congratulation_with_titles(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="Happy birthday, Oleksandr!"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_congratulation(
+        event_type="birthday",
+        persons=[{"name": "Oleksandr", "user_id": 1, "username": "olex"}],
+        person_facts={"1": ["loves pizza"]},
+        titles=["Oleksandr's birthday"],
+    )
+    assert isinstance(result, str)
+    call_args = mock_client.models.generate_content.call_args
+    prompt = call_args.kwargs.get("contents") or call_args.args[0]
+    assert "Oleksandr's birthday" in prompt
+
+
+# --- analyze_reaction tests ---
+
+
+@patch("bot.gemini.genai.Client")
+def test_analyze_reaction_negative_emoji(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"should_respond": true, "response": "Tough crowd!"}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.analyze_reaction(
+        bot_message="Here's my take on the situation.",
+        reaction_emoji="\U0001f44e",
+        recent_history="[Alice]: What do you think?",
+    )
+    assert result["should_respond"] is True
+    assert result["response"] == "Tough crowd!"
+
+
+@patch("bot.gemini.genai.Client")
+def test_analyze_reaction_positive_emoji(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"should_respond": false, "response": ""}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.analyze_reaction(
+        bot_message="Here's my take.",
+        reaction_emoji="\U0001f44d",
+        recent_history="",
+    )
+    assert result["should_respond"] is False
+
+
+@patch("bot.gemini.genai.Client")
+def test_analyze_reaction_bad_json_fallback(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="I don't know what to do"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.analyze_reaction(
+        bot_message="Hello",
+        reaction_emoji="\U0001f44e",
+        recent_history="",
+    )
+    assert result["should_respond"] is False
+    assert result["response"] == ""

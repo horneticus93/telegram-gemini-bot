@@ -16,6 +16,7 @@ A Telegram bot powered by Google Gemini AI with real-time web search and persist
 - **Chat member awareness** — knows who is in the chat and answers questions accurately about group members
 - **Web UI** — browse and edit user profiles at `http://your-host:8001` via Datasette
 - **Access control** — only responds in whitelisted group chats
+- **Proactive messaging** — congratulates on birthdays, starts discussions, and fills silence (configurable)
 - **Self-hosted** — runs as Docker containers on your own hardware
 
 ## How It Works
@@ -139,6 +140,11 @@ alembic upgrade head
 | `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in context per chat |
 | `MEMORY_UPDATE_INTERVAL` | No | `10` | How many messages between automatic profile updates |
 | `DB_PATH` | No | `/app/data/memory.db` | Path to the Alembic-managed SQLite database |
+| `PROACTIVE_ENABLED` | No | `false` | Enable proactive bot messages (date greetings, discussion starters, silence breaker) |
+| `PROACTIVE_TIMEZONE` | No | `Europe/Kyiv` | Timezone for scheduling proactive messages |
+| `PROACTIVE_DAILY_LIMIT` | No | `4` | Max proactive messages per chat per day |
+| `PROACTIVE_SILENCE_MINUTES` | No | `7` | Minutes of silence before bot might respond |
+| `PROACTIVE_SILENCE_PROBABILITY` | No | `0.5` | Probability (0-1) of responding to silence |
 
 ### Available Gemini models
 
