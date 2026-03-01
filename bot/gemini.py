@@ -291,12 +291,63 @@ class GeminiClient:
         """Generate an embedding vector for the given text."""
         if not text:
             return []
-        
+
         response = self._client.models.embed_content(
             model=self._embedding_model,
             contents=[text],
         )
         return response.embeddings[0].values
+
+    def extract_date_from_fact(self, fact_text: str) -> dict | None:
+        """Analyze a fact for recurring date events (birthday, anniversary, etc.).
+
+        Returns a dict with event_type, event_date (MM-DD), and title if a
+        recurring date is found, or None otherwise.
+        """
+        prompt = (
+            "Analyze this fact and determine if it contains a recurring date event "
+            "(birthday, anniversary, or other annual event).\n\n"
+            f"Fact: {fact_text}\n\n"
+            "If YES, return a JSON object:\n"
+            '{"event_type":"birthday"|"anniversary"|"custom", "event_date":"MM-DD", "title":"short description"}\n\n'
+            "If NO date event found, return exactly: null\n\n"
+            "Rules:\n"
+            "1. event_date must be MM-DD format (e.g. 03-10 for March 10).\n"
+            "2. title should be a brief human-readable label.\n"
+            "3. No markdown, no explanations."
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a strict date extraction system. "
+                    "Output valid JSON or null only."
+                ),
+            ),
+        )
+        text = (response.text or "").strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                return None
+            event_type = str(data.get("event_type", "custom")).strip().lower()
+            if event_type not in {"birthday", "anniversary", "custom"}:
+                event_type = "custom"
+            return {
+                "event_type": event_type,
+                "event_date": str(data.get("event_date", "")),
+                "title": str(data.get("title", "")),
+            }
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
 
 
 def _parse_bot_response(raw: str) -> tuple[str, bool]:

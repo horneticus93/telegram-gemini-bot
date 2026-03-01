@@ -301,3 +301,39 @@ def test_decide_fact_action_falls_back_when_target_not_in_candidates(mock_client
 def test_system_prompt_requires_optional_memory_usage():
     assert "ONLY when they are relevant" in SYSTEM_PROMPT
     assert "Do not force these facts" in SYSTEM_PROMPT
+
+
+# --- GeminiClient.extract_date_from_fact() tests ---
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_returns_date(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"event_type":"birthday","event_date":"03-10","title":"Oleksandr\'s birthday"}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("Oleksandr's birthday is March 10")
+    assert result is not None
+    assert result["event_type"] == "birthday"
+    assert result["event_date"] == "03-10"
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_returns_none_for_no_date(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(text="null")
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("Oleksandr likes pizza")
+    assert result is None
+
+
+@patch("bot.gemini.genai.Client")
+def test_extract_date_from_fact_handles_bad_json(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(text="not json")
+    client = GeminiClient(api_key="fake-key")
+    result = client.extract_date_from_fact("some fact")
+    assert result is None

@@ -91,6 +91,9 @@ class _LazyGeminiClient:
             user_name=user_name,
         )
 
+    def extract_date_from_fact(self, fact_text: str) -> dict | None:
+        return self._get().extract_date_from_fact(fact_text)
+
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
 
