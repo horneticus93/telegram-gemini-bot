@@ -551,9 +551,10 @@ class UserMemory:
                 WHERE COALESCE(user_id, -1) = COALESCE(?, -1)
                   AND chat_id = ?
                   AND event_type = ?
+                  AND title = ?
                   AND is_active = 1
                 """,
-                (user_id, chat_id, event_type),
+                (user_id, chat_id, event_type, title),
             ).fetchone()
             if existing:
                 conn.execute(

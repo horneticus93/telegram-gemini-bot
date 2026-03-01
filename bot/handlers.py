@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import logging
 from telegram import Update
@@ -197,8 +198,15 @@ async def _update_user_profile(
                 continue
             date_info = gemini_client.extract_date_from_fact(fact_text)
             if date_info:
+                # Try to find the target user ID from the fact text.
+                # Facts reference users as "Name [ID: 123]", so extract
+                # the ID of the person the date belongs to.
+                target_user_id = user_id
+                id_match = re.search(r"\[ID:\s*(\d+)\]", fact_text)
+                if id_match:
+                    target_user_id = int(id_match.group(1))
                 user_memory.upsert_scheduled_event(
-                    user_id=user_id,
+                    user_id=target_user_id,
                     chat_id=chat_id,
                     event_type=date_info["event_type"],
                     event_date=date_info["event_date"],
