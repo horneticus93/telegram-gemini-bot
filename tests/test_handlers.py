@@ -317,3 +317,25 @@ async def test_sends_typing_action():
 
     # Verify typing action was sent
     context.bot.send_chat_action.assert_called_with(chat_id=123, action="typing")
+
+
+@pytest.mark.asyncio
+async def test_silence_timer_reset_called_on_message():
+    """Each group message resets the silence timer."""
+    from bot.handlers import handle_message
+
+    ALLOWED_CHAT_ID = 600
+    update = make_update("just chatting", chat_id=ALLOWED_CHAT_ID)
+    update.message.chat.type = "group"
+    context = make_context()
+
+    with (
+        patch("bot.handlers.gemini_client"),
+        patch("bot.handlers.user_memory") as mock_memory,
+        patch("bot.handlers.session_manager"),
+        patch("bot.handlers.reset_silence_timer") as mock_reset,
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+    ):
+        mock_memory.increment_message_count.return_value = 1
+        await handle_message(update, context)
+        mock_reset.assert_called_once_with(context.job_queue, ALLOWED_CHAT_ID)

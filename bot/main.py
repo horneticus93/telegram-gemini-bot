@@ -14,6 +14,7 @@ from .memory_handlers import (
     handle_memory_command,
     handle_memory_edit_reply,
 )
+from .scheduler import register_jobs
 
 load_dotenv()
 
@@ -43,6 +44,8 @@ def main() -> None:
     app.add_handler(CommandHandler("memory", handle_memory_command))
     app.add_handler(CallbackQueryHandler(handle_memory_callback, pattern=r"^mem:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _message_dispatcher))
+
+    register_jobs(app)
 
     logger.info("Bot starting, polling for updates...")
     app.run_polling(drop_pending_updates=True)

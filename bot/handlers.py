@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 from .session import SessionManager
 from .gemini import GeminiClient
 from .memory import UserMemory
+from .scheduler import reset_silence_timer
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if not t.cancelled() and t.exception() is not None
             else None
         )
+
+    # Reset silence breaker timer for this chat
+    if hasattr(context, 'job_queue') and context.job_queue:
+        reset_silence_timer(context.job_queue, chat_id)
+
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
     is_reply_to_bot = (
