@@ -337,3 +337,71 @@ def test_extract_date_from_fact_handles_bad_json(mock_client_cls):
     client = GeminiClient(api_key="fake-key")
     result = client.extract_date_from_fact("some fact")
     assert result is None
+
+
+# --- GeminiClient proactive content generation tests ---
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_congratulation(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="Happy birthday, Oleksandr! Hope your day is amazing!"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_congratulation(
+        event_type="birthday",
+        persons=[{"name": "Oleksandr", "user_id": 1, "username": "olex"}],
+        person_facts={"1": ["loves pizza", "works as developer"]},
+    )
+    assert isinstance(result, str)
+    assert len(result) > 10
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_engagement(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text='{"message": "Hey everyone, what movie should we watch?", "target_user_id": null}'
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_engagement(
+        members=[{"name": "Oleksandr", "user_id": 1}],
+        member_facts={"1": ["loves sci-fi movies"]},
+        recent_history="Oleksandr: I watched Dune yesterday",
+    )
+    assert "message" in result
+    assert "target_user_id" in result
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_engagement_bad_json_fallback(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="Hey what is going on guys?"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_engagement(
+        members=[], member_facts={}, recent_history="",
+    )
+    assert result["message"] == "Hey what is going on guys?"
+    assert result["target_user_id"] is None
+
+
+@patch("bot.gemini.genai.Client")
+def test_generate_silence_response(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.models.generate_content.return_value = MagicMock(
+        text="That's an interesting point about AI, what do you think?"
+    )
+    client = GeminiClient(api_key="fake-key")
+    result = client.generate_silence_response(
+        recent_messages=[{"author": "Oleksandr [ID: 1]", "text": "AI is getting crazy"}],
+        author_facts={"1": ["interested in technology"]},
+    )
+    assert isinstance(result, str)
+    assert len(result) > 0

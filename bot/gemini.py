@@ -349,6 +349,152 @@ class GeminiClient:
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
 
+    def generate_congratulation(
+        self,
+        event_type: str,
+        persons: list[dict],
+        person_facts: dict[str, list[str]],
+    ) -> str:
+        persons_block = "\n".join(
+            f"- {p['name']} (user_id={p['user_id']}, username=@{p.get('username', '')})"
+            for p in persons
+        )
+        facts_block = ""
+        for uid, facts in person_facts.items():
+            if facts:
+                facts_block += f"\nFacts about user {uid}:\n"
+                facts_block += "\n".join(f"  - {f}" for f in facts)
+
+        prompt = (
+            f"Write a congratulation message for the following event: {event_type}\n\n"
+            f"People to congratulate:\n{persons_block}\n"
+            f"{facts_block}\n\n"
+            "Rules:\n"
+            "1. Write 2-4 sentences in casual Telegram style.\n"
+            "2. Personalize using the facts provided about each person.\n"
+            "3. Be creative and fun.\n"
+            "4. Plain text only, no markdown."
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a friendly Telegram chat bot writing a congratulation message. "
+                    "Output plain text only."
+                ),
+            ),
+        )
+        text = response.text
+        if text is None:
+            return "Congratulations!"
+        return text.strip()
+
+    def generate_engagement(
+        self,
+        members: list[dict],
+        member_facts: dict[str, list[str]],
+        recent_history: str,
+    ) -> dict:
+        members_block = "\n".join(
+            f"- {m['name']} (user_id={m['user_id']})" for m in members
+        ) or "(no members)"
+        facts_block = ""
+        for uid, facts in member_facts.items():
+            if facts:
+                facts_block += f"\nFacts about user {uid}:\n"
+                facts_block += "\n".join(f"  - {f}" for f in facts)
+
+        prompt = (
+            "Generate an engagement message for a Telegram group chat.\n\n"
+            f"Chat members:\n{members_block}\n"
+            f"{facts_block}\n\n"
+            f"Recent chat history:\n{recent_history or '(empty)'}\n\n"
+            "Choose ONE of these approaches:\n"
+            "A) Ask a fun question to the whole group.\n"
+            "B) Ask a personal question directed at one specific person.\n"
+            "C) Share an interesting fact or observation.\n\n"
+            "Return a JSON object with exactly these keys:\n"
+            '{"message": "your message text", "target_user_id": <int user_id or null>}\n\n'
+            "If your message is directed at a specific person (approach B), set target_user_id to their user_id.\n"
+            "Otherwise set target_user_id to null.\n"
+            "No markdown, no explanations. Output raw JSON only."
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a casual Telegram group chat member generating engagement. "
+                    "Output valid JSON only."
+                ),
+            ),
+        )
+        raw_text = (response.text or "").strip()
+        if not raw_text:
+            return {"message": "", "target_user_id": None}
+        text = raw_text
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                return {"message": raw_text, "target_user_id": None}
+            message = str(data.get("message", raw_text))
+            target = data.get("target_user_id")
+            if target is not None:
+                try:
+                    target = int(target)
+                except (TypeError, ValueError):
+                    target = None
+            return {"message": message, "target_user_id": target}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {"message": raw_text, "target_user_id": None}
+
+    def generate_silence_response(
+        self,
+        recent_messages: list[dict],
+        author_facts: dict[str, list[str]],
+    ) -> str:
+        messages_block = "\n".join(
+            f"[{m['author']}]: {m['text']}" for m in recent_messages
+        ) or "(no recent messages)"
+        facts_block = ""
+        for uid, facts in author_facts.items():
+            if facts:
+                facts_block += f"\nFacts about user {uid}:\n"
+                facts_block += "\n".join(f"  - {f}" for f in facts)
+
+        prompt = (
+            "The group chat has gone quiet. Write a message to re-engage the conversation.\n\n"
+            f"Recent messages:\n{messages_block}\n"
+            f"{facts_block}\n\n"
+            "Choose ONE of these approaches:\n"
+            "A) Continue or comment on the last topic discussed.\n"
+            "B) Ask a follow-up question about something someone said.\n"
+            "C) Bring up a new topic based on known member interests.\n\n"
+            "Rules:\n"
+            "1. Write 1-2 sentences in casual Telegram tone.\n"
+            "2. Plain text only, no markdown."
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a casual group chat member. "
+                    "Output plain text only."
+                ),
+            ),
+        )
+        text = response.text
+        if text is None:
+            return ""
+        return text.strip()
+
 
 def _parse_bot_response(raw: str) -> tuple[str, bool]:
     """Parse the JSON response from the bot.
