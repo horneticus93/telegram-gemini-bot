@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 from .session import SessionManager
 from .gemini import GeminiClient
 from .memory import UserMemory
+from .scheduler import reset_silence_timer
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,38 @@ class _LazyGeminiClient:
             user_name=user_name,
         )
 
+    def extract_date_from_fact(self, fact_text: str) -> dict | None:
+        return self._get().extract_date_from_fact(fact_text)
+
+    def generate_congratulation(
+        self,
+        event_type: str,
+        persons: list[dict],
+        person_facts: dict[str, list[str]],
+    ) -> str:
+        return self._get().generate_congratulation(
+            event_type=event_type, persons=persons, person_facts=person_facts,
+        )
+
+    def generate_engagement(
+        self,
+        members: list[dict],
+        member_facts: dict[str, list[str]],
+        recent_history: str,
+    ) -> dict:
+        return self._get().generate_engagement(
+            members=members, member_facts=member_facts, recent_history=recent_history,
+        )
+
+    def generate_silence_response(
+        self,
+        recent_messages: list[dict],
+        author_facts: dict[str, list[str]],
+    ) -> str:
+        return self._get().generate_silence_response(
+            recent_messages=recent_messages, author_facts=author_facts,
+        )
+
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
 
@@ -156,6 +189,21 @@ async def _update_user_profile(
         if chat_facts:
             user_memory.upsert_chat_facts(chat_id=chat_id, facts=chat_facts)
         logger.info("Updated fact memory for user %s (%s)", user_id, user_name)
+
+        # Extract dates from newly created facts for proactive scheduling
+        for item in extracted_facts:
+            fact_text = str(item.get("fact", "")).strip()
+            if not fact_text:
+                continue
+            date_info = gemini_client.extract_date_from_fact(fact_text)
+            if date_info:
+                user_memory.upsert_scheduled_event(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    event_type=date_info["event_type"],
+                    event_date=date_info["event_date"],
+                    title=date_info["title"],
+                )
     except Exception:
         logger.exception("Failed to update profile for user %s", user_id)
 
@@ -188,6 +236,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if not t.cancelled() and t.exception() is not None
             else None
         )
+
+    # Reset silence breaker timer for this chat
+    if hasattr(context, 'job_queue') and context.job_queue:
+        reset_silence_timer(context.job_queue, chat_id)
+
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
     is_reply_to_bot = (

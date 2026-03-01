@@ -458,3 +458,106 @@ def test_update_fact_text_wrong_user_returns_false(mem):
     # Original text should remain
     facts_after, _ = mem.get_user_facts_page(user_id=1, page=0)
     assert facts_after[0]["fact_text"] == "Alice likes cats"
+
+
+# --- scheduled_events CRUD tests ---
+
+
+def test_upsert_scheduled_event_creates_new(mem):
+    mem.upsert_scheduled_event(
+        user_id=1,
+        chat_id=100,
+        event_type="birthday",
+        event_date="03-15",
+        title="Alice's birthday",
+    )
+    events = mem.get_events_for_date("03-15")
+    assert len(events) == 1
+    evt = events[0]
+    assert evt["user_id"] == 1
+    assert evt["chat_id"] == 100
+    assert evt["event_type"] == "birthday"
+    assert evt["event_date"] == "03-15"
+    assert evt["title"] == "Alice's birthday"
+    assert evt["source_fact_id"] is None
+    assert evt["last_triggered"] is None
+    assert evt["id"] is not None
+
+
+def test_upsert_scheduled_event_updates_existing(mem):
+    mem.upsert_scheduled_event(
+        user_id=1,
+        chat_id=100,
+        event_type="birthday",
+        event_date="03-15",
+        title="Alice's birthday",
+    )
+    # Same (user_id, chat_id, event_type) but different date and title
+    mem.upsert_scheduled_event(
+        user_id=1,
+        chat_id=100,
+        event_type="birthday",
+        event_date="04-20",
+        title="Alice's birthday (corrected)",
+    )
+    # Old date should return nothing
+    old_events = mem.get_events_for_date("03-15")
+    assert len(old_events) == 0
+
+    # New date should have the updated event
+    new_events = mem.get_events_for_date("04-20")
+    assert len(new_events) == 1
+    assert new_events[0]["title"] == "Alice's birthday (corrected)"
+    assert new_events[0]["event_date"] == "04-20"
+
+
+def test_get_events_for_date_filters_inactive(mem):
+    mem.upsert_scheduled_event(
+        user_id=1,
+        chat_id=100,
+        event_type="birthday",
+        event_date="06-01",
+        title="Alice's birthday",
+    )
+    # Deactivate via raw SQL
+    with sqlite3.connect(mem.db_path) as conn:
+        conn.execute("UPDATE scheduled_events SET is_active = 0")
+        conn.commit()
+
+    events = mem.get_events_for_date("06-01")
+    assert events == []
+
+
+def test_get_events_for_date_groups_by_chat(mem):
+    mem.upsert_scheduled_event(
+        user_id=1, chat_id=100, event_type="birthday",
+        event_date="07-04", title="Alice bday",
+    )
+    mem.upsert_scheduled_event(
+        user_id=2, chat_id=100, event_type="birthday",
+        event_date="07-04", title="Bob bday",
+    )
+    mem.upsert_scheduled_event(
+        user_id=3, chat_id=200, event_type="birthday",
+        event_date="07-04", title="Carol bday",
+    )
+    events = mem.get_events_for_date("07-04")
+    assert len(events) == 3
+    # Ordered by chat_id, event_type
+    assert events[0]["chat_id"] == 100
+    assert events[1]["chat_id"] == 100
+    assert events[2]["chat_id"] == 200
+
+
+def test_mark_event_triggered(mem):
+    mem.upsert_scheduled_event(
+        user_id=1, chat_id=100, event_type="anniversary",
+        event_date="12-25", title="Xmas",
+    )
+    events = mem.get_events_for_date("12-25")
+    assert events[0]["last_triggered"] is None
+
+    mem.mark_event_triggered(events[0]["id"])
+
+    events_after = mem.get_events_for_date("12-25")
+    assert events_after[0]["last_triggered"] is not None

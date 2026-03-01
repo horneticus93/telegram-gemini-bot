@@ -24,10 +24,12 @@ def reset_user_memory_db():
         conn.execute("DELETE FROM user_profiles")
         conn.execute("DELETE FROM chat_memberships")
         conn.execute("DELETE FROM memory_facts")
+        conn.execute("DELETE FROM scheduled_events")
         conn.commit()
     yield
     with sqlite3.connect(user_memory.db_path) as conn:
         conn.execute("DELETE FROM user_profiles")
         conn.execute("DELETE FROM chat_memberships")
         conn.execute("DELETE FROM memory_facts")
+        conn.execute("DELETE FROM scheduled_events")
         conn.commit()
