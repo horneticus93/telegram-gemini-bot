@@ -95,6 +95,35 @@ class _LazyGeminiClient:
     def extract_date_from_fact(self, fact_text: str) -> dict | None:
         return self._get().extract_date_from_fact(fact_text)
 
+    def generate_congratulation(
+        self,
+        event_type: str,
+        persons: list[dict],
+        person_facts: dict[str, list[str]],
+    ) -> str:
+        return self._get().generate_congratulation(
+            event_type=event_type, persons=persons, person_facts=person_facts,
+        )
+
+    def generate_engagement(
+        self,
+        members: list[dict],
+        member_facts: dict[str, list[str]],
+        recent_history: str,
+    ) -> dict:
+        return self._get().generate_engagement(
+            members=members, member_facts=member_facts, recent_history=recent_history,
+        )
+
+    def generate_silence_response(
+        self,
+        recent_messages: list[dict],
+        author_facts: dict[str, list[str]],
+    ) -> str:
+        return self._get().generate_silence_response(
+            recent_messages=recent_messages, author_facts=author_facts,
+        )
+
 gemini_client: _LazyGeminiClient = _LazyGeminiClient()
 
 
