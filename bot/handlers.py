@@ -159,6 +159,21 @@ async def _update_user_profile(
         if chat_facts:
             user_memory.upsert_chat_facts(chat_id=chat_id, facts=chat_facts)
         logger.info("Updated fact memory for user %s (%s)", user_id, user_name)
+
+        # Extract dates from newly created facts for proactive scheduling
+        for item in extracted_facts:
+            fact_text = str(item.get("fact", "")).strip()
+            if not fact_text:
+                continue
+            date_info = gemini_client.extract_date_from_fact(fact_text)
+            if date_info:
+                user_memory.upsert_scheduled_event(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    event_type=date_info["event_type"],
+                    event_date=date_info["event_date"],
+                    title=date_info["title"],
+                )
     except Exception:
         logger.exception("Failed to update profile for user %s", user_id)
 

@@ -252,6 +252,51 @@ async def test_memory_not_injected_when_no_relevant_facts():
 
 
 @pytest.mark.asyncio
+async def test_date_extraction_runs_after_fact_upsert():
+    """When facts are upserted, extract_date_from_fact is called for each."""
+    from bot.handlers import handle_message
+
+    ALLOWED_CHAT_ID = 500
+    update = make_update("@testbot my birthday is March 10", chat_id=ALLOWED_CHAT_ID, first_name="Oleksandr")
+    update.message.from_user.id = 200
+    update.message.chat.type = "private"
+    context = make_context(bot_username="testbot")
+
+    with (
+        patch("bot.handlers.gemini_client") as mock_gemini,
+        patch("bot.handlers.user_memory") as mock_memory,
+        patch("bot.handlers.session_manager"),
+        patch("bot.handlers.ALLOWED_CHAT_IDS", {ALLOWED_CHAT_ID}),
+        patch("bot.handlers.MEMORY_UPDATE_INTERVAL", 1),
+    ):
+        mock_memory.increment_message_count.return_value = 1
+        mock_memory.get_profile.return_value = ""
+        mock_memory.get_user_facts.return_value = []
+        mock_memory.get_chat_members.return_value = []
+        mock_memory.search_facts_by_embedding.return_value = []
+        mock_memory.find_similar_facts.return_value = []
+
+        mock_gemini.extract_facts.return_value = [
+            {"fact": "Oleksandr's birthday is March 10", "importance": 0.9, "confidence": 0.9, "scope": "user"},
+        ]
+        mock_gemini.embed_text.return_value = [0.1] * 768
+        mock_gemini.decide_fact_action.return_value = {"action": "keep_add_new", "target_fact_id": None}
+        mock_gemini.extract_date_from_fact.return_value = {
+            "event_type": "birthday", "event_date": "03-10", "title": "Oleksandr's birthday",
+        }
+        mock_gemini.ask.return_value = ("Got it!", False)
+
+        await handle_message(update, context)
+        # Wait for background task to complete
+        await asyncio.sleep(0.1)
+
+        mock_gemini.extract_date_from_fact.assert_called_once_with(
+            "Oleksandr's birthday is March 10"
+        )
+        mock_memory.upsert_scheduled_event.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_sends_typing_action():
     from bot.handlers import handle_message
     update = make_update("@testbot tell me a story", chat_id=123, first_name="Dave")
