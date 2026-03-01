@@ -222,6 +222,12 @@ def register_jobs(app):
     _scheduler._memory = UserMemory(db_path=os.getenv("DB_PATH", "/app/data/memory.db"))
 
     job_queue = app.job_queue
+    if job_queue is None:
+        logger.error(
+            "JobQueue not available. Install python-telegram-bot[job-queue] "
+            "to enable proactive features."
+        )
+        return
 
     # Daily date check at 09:00 local time
     job_queue.run_daily(
