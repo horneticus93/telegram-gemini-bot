@@ -6,9 +6,10 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
+    MessageReactionHandler,
     filters,
 )
-from .handlers import handle_message
+from .handlers import handle_message, handle_reaction
 from .memory_handlers import (
     handle_memory_callback,
     handle_memory_command,
@@ -43,6 +44,7 @@ def main() -> None:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("memory", handle_memory_command))
     app.add_handler(CallbackQueryHandler(handle_memory_callback, pattern=r"^mem:"))
+    app.add_handler(MessageReactionHandler(handle_reaction))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _message_dispatcher))
 
     register_jobs(app)

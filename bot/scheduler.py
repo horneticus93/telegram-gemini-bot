@@ -67,10 +67,14 @@ class ProactiveScheduler:
             if not self._can_send(chat_id):
                 continue
 
-            # Gather person info + facts for each event in this group
+            # Gather person info + facts + titles for each event in this group
             persons = []
             person_facts: dict[str, list[str]] = {}
+            titles = []
             for event in group_events:
+                title = event.get("title")
+                if title:
+                    titles.append(title)
                 user_id = event.get("user_id")
                 if user_id is not None:
                     members = self._memory.get_chat_members(chat_id)
@@ -87,6 +91,7 @@ class ProactiveScheduler:
                 event_type=event_type,
                 persons=persons,
                 person_facts=person_facts,
+                titles=titles or None,
             )
 
             await bot.send_message(chat_id=chat_id, text=message)

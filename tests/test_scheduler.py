@@ -159,6 +159,50 @@ class TestBreakSilence:
         bot.send_message.assert_not_called()
 
 
+    @pytest.mark.asyncio
+    async def test_check_dates_with_user_id_none_event(self, scheduler):
+        """Chat-wide events (user_id=None) pass titles and empty persons."""
+        scheduler._memory.get_events_for_date.return_value = [
+            {"id": 2, "user_id": None, "chat_id": -100, "event_type": "holiday",
+             "title": "International Women's Day", "last_triggered": None},
+        ]
+        scheduler._gemini.generate_congratulation.return_value = "Happy Women's Day!"
+
+        bot = AsyncMock()
+        fake_now = datetime(2026, 3, 8, 10, 0)
+        with patch("bot.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
+            await scheduler.check_dates(bot)
+
+        bot.send_message.assert_called_once()
+        call_kwargs = scheduler._gemini.generate_congratulation.call_args.kwargs
+        assert call_kwargs["persons"] == []
+        assert call_kwargs["titles"] == ["International Women's Day"]
+        scheduler._memory.mark_event_triggered.assert_called_once_with(2)
+
+    @pytest.mark.asyncio
+    async def test_check_dates_passes_titles(self, scheduler):
+        """Titles are collected and passed to generate_congratulation."""
+        scheduler._memory.get_events_for_date.return_value = [
+            {"id": 1, "user_id": 1, "chat_id": -100, "event_type": "birthday",
+             "title": "Olex birthday", "last_triggered": None},
+        ]
+        scheduler._memory.get_user_facts.return_value = ["loves pizza"]
+        scheduler._memory.get_chat_members.return_value = [(1, "Oleksandr")]
+        scheduler._gemini.generate_congratulation.return_value = "Happy birthday!"
+
+        bot = AsyncMock()
+        fake_now = datetime(2026, 3, 10, 10, 0)
+        with patch("bot.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
+            await scheduler.check_dates(bot)
+
+        call_kwargs = scheduler._gemini.generate_congratulation.call_args.kwargs
+        assert call_kwargs["titles"] == ["Olex birthday"]
+
+
 class TestRunEngagement:
     @pytest.mark.asyncio
     async def test_run_engagement_sends_message(self, scheduler):
