@@ -1,19 +1,11 @@
-import os
 import logging
+import os
+
 from dotenv import load_dotenv
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    MessageHandler,
-    filters,
-)
-from .handlers import handle_message
-from .memory_handlers import (
-    handle_memory_callback,
-    handle_memory_command,
-    handle_memory_edit_reply,
-)
+from telegram.ext import Application, MessageHandler, filters
+
+from .config import TELEGRAM_BOT_TOKEN, GEMINI_API_KEY
+from .handlers import handle_message, bot_memory
 
 load_dotenv()
 
@@ -24,30 +16,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def _message_dispatcher(update, context):
-    """Dispatch text messages: try edit-reply first, then normal handler."""
-    consumed = await handle_memory_edit_reply(update, context)
-    if not consumed:
-        await handle_message(update, context)
-
-
 def main() -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
+    if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
-
-    if not os.getenv("GEMINI_API_KEY"):
+    if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("memory", handle_memory_command))
-    app.add_handler(CallbackQueryHandler(handle_memory_callback, pattern=r"^mem:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _message_dispatcher))
+    bot_memory.init_db()
 
-    logger.info("Bot starting, polling for updates...")
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+
+    logger.info("Bot v2.0.0 starting, polling for updates...")
     app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     main()
-
