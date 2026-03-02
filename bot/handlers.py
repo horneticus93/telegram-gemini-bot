@@ -1,193 +1,130 @@
-import os
+"""Main message orchestration, access control, routing, and background tasks.
+
+This module replaces the old handlers with a LangGraph-based agent loop.
+Module-level singletons are initialized eagerly (session, memory) or
+lazily (graph/LLM/embeddings) so imports work without an API key.
+"""
+
 import asyncio
 import logging
+
+from langchain_core.messages import AIMessage, HumanMessage
 from telegram import Update
 from telegram.ext import ContextTypes
+
+from .config import (
+    ALLOWED_CHAT_IDS,
+    DB_PATH,
+    GEMINI_API_KEY,
+    GEMINI_EMBEDDING_MODEL,
+    GEMINI_MODEL,
+    MAX_HISTORY_MESSAGES,
+    RECENT_WINDOW_SIZE,
+    SUMMARY_MAX_WORDS,
+    SUMMARY_THRESHOLD,
+)
+from .graph import build_context_node, build_graph, should_respond_node
+from .memory import BotMemory
+from .prompts import SUMMARIZE_PROMPT, SUMMARY_UPDATE_PROMPT
 from .session import SessionManager
-from .gemini import GeminiClient
-from .memory import UserMemory
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_CHAT_IDS: set[int] = {
-    int(cid.strip())
-    for cid in os.getenv("ALLOWED_CHAT_IDS", "").split(",")
-    if cid.strip()
-}
-
-MEMORY_UPDATE_INTERVAL = int(os.getenv("MEMORY_UPDATE_INTERVAL", "10"))
+# ── Module-level singletons ───────────────────────────────────────────
 
 session_manager = SessionManager(
-    max_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
+    max_messages=MAX_HISTORY_MESSAGES,
+    recent_window=RECENT_WINDOW_SIZE,
 )
-user_memory = UserMemory(db_path=os.getenv("DB_PATH", "/app/data/memory.db"))
+bot_memory = BotMemory(db_path=DB_PATH)
 
 
-class _LazyGeminiClient:
-    """Wraps GeminiClient with lazy initialisation so the module can be
-    imported without a valid GEMINI_API_KEY (e.g. during tests).  Tests that
-    patch ``bot.handlers.gemini_client`` replace this object entirely, so the
-    lazy logic is never exercised in that path."""
+# ── Lazy graph / LLM / embeddings ────────────────────────────────────
 
-    def __init__(self) -> None:
-        self._client: GeminiClient | None = None
 
-    def _get(self) -> GeminiClient:
-        if self._client is None:
-            self._client = GeminiClient(api_key=os.getenv("GEMINI_API_KEY", ""))
-        return self._client
+class _LazyGraph:
+    """Defers LLM and embedding initialization until first use.
 
-    def ask(
-        self,
-        history: list[dict],
-        question: str,
-        user_profile: str = "",
-        chat_members: list[str] | None = None,
-        retrieved_profiles: list[str] | None = None,
-    ) -> tuple[str, bool]:
-        return self._get().ask(
-            history=history,
-            question=question,
-            user_profile=user_profile,
-            chat_members=chat_members,
-            retrieved_profiles=retrieved_profiles,
+    This allows the module to be imported without a valid API key
+    (useful for testing, where ``compiled_graph`` is patched out).
+    """
+
+    def __init__(self):
+        self._graph = None
+        self._llm = None
+        self._embeddings = None
+
+    def _init(self):
+        from langchain_google_genai import (
+            ChatGoogleGenerativeAI,
+            GoogleGenerativeAIEmbeddings,
         )
 
-    def extract_profile(
-        self, existing_profile: str, recent_history: str, user_name: str
-    ) -> str:
-        return self._get().extract_profile(
-            existing_profile=existing_profile,
-            recent_history=recent_history,
-            user_name=user_name,
+        self._llm = ChatGoogleGenerativeAI(
+            model=GEMINI_MODEL,
+            google_api_key=GEMINI_API_KEY,
+            temperature=0.7,
+            max_retries=2,
         )
-
-    def embed_text(self, text: str) -> list[float]:
-        return self._get().embed_text(text)
-
-    def extract_facts(
-        self,
-        existing_facts: list[str],
-        recent_history: str,
-        user_name: str,
-    ) -> list[dict]:
-        return self._get().extract_facts(
-            existing_facts=existing_facts,
-            recent_history=recent_history,
-            user_name=user_name,
+        self._embeddings = GoogleGenerativeAIEmbeddings(
+            model=GEMINI_EMBEDDING_MODEL,
+            google_api_key=GEMINI_API_KEY,
         )
+        self._graph = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
 
-    def decide_fact_action(
-        self,
-        candidate_fact: str,
-        scope: str,
-        similar_facts: list[dict],
-        user_name: str,
-    ) -> dict:
-        return self._get().decide_fact_action(
-            candidate_fact=candidate_fact,
-            scope=scope,
-            similar_facts=similar_facts,
-            user_name=user_name,
-        )
+    def invoke(self, state):
+        if self._graph is None:
+            self._init()
+        return self._graph.invoke(state)
 
-gemini_client: _LazyGeminiClient = _LazyGeminiClient()
+    def embed(self, text):
+        if self._embeddings is None:
+            self._init()
+        return self._embeddings.embed_query(text)
 
 
-async def _update_user_profile(
-    user_id: int, chat_id: int, user_name: str
-) -> None:
-    try:
-        existing_facts = user_memory.get_user_facts(user_id=user_id, limit=40)
-        recent_history = session_manager.format_history(chat_id)
-        extracted_facts = gemini_client.extract_facts(
-            existing_facts=existing_facts,
-            recent_history=recent_history,
-            user_name=f"{user_name} [ID: {user_id}]",
-        )
-        if not extracted_facts:
-            return
+compiled_graph = _LazyGraph()
 
-        user_facts = []
-        chat_facts = []
-        for item in extracted_facts:
-            fact_text = str(item.get("fact", "")).strip()
-            if not fact_text:
-                continue
-            scoped_fact = dict(item)
-            scoped_fact["embedding"] = gemini_client.embed_text(fact_text)
-            if item.get("scope") == "chat":
-                similar_facts = user_memory.find_similar_facts(
-                    scope="chat",
-                    query_embedding=scoped_fact["embedding"],
-                    chat_id=chat_id,
-                    limit=3,
-                )
-                if similar_facts:
-                    scoped_fact.update(
-                        gemini_client.decide_fact_action(
-                            candidate_fact=fact_text,
-                            scope="chat",
-                            similar_facts=similar_facts,
-                            user_name=user_name,
-                        )
-                    )
-                chat_facts.append(scoped_fact)
-            else:
-                similar_facts = user_memory.find_similar_facts(
-                    scope="user",
-                    query_embedding=scoped_fact["embedding"],
-                    user_id=user_id,
-                    limit=3,
-                )
-                if similar_facts:
-                    scoped_fact.update(
-                        gemini_client.decide_fact_action(
-                            candidate_fact=fact_text,
-                            scope="user",
-                            similar_facts=similar_facts,
-                            user_name=user_name,
-                        )
-                    )
-                user_facts.append(scoped_fact)
 
-        if user_facts:
-            user_memory.upsert_user_facts(user_id=user_id, chat_id=chat_id, facts=user_facts)
-        if chat_facts:
-            user_memory.upsert_chat_facts(chat_id=chat_id, facts=chat_facts)
-        logger.info("Updated fact memory for user %s (%s)", user_id, user_name)
-    except Exception:
-        logger.exception("Failed to update profile for user %s", user_id)
+# ── Public helpers ────────────────────────────────────────────────────
+
+
+def embed_text(text: str) -> list[float]:
+    """Generate an embedding vector for *text* via the lazy graph embeddings."""
+    return compiled_graph.embed(text)
+
+
+# ── Main message handler ─────────────────────────────────────────────
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process every incoming Telegram text message."""
+
+    # 1. Return early if no message text
     if not update.message or not update.message.text:
         return
 
     chat_id = update.message.chat_id
+
+    # 2. Return if chat_id not in ALLOWED_CHAT_IDS
     if chat_id not in ALLOWED_CHAT_IDS:
         return
 
     user = update.message.from_user
+
+    # 3. Return if no user
     if user is None:
         return
-    author = f"{user.first_name or 'Unknown'} [ID: {user.id}]"
+
     text = update.message.text
+
+    # 4. Build author string
+    author = f"{user.first_name or 'Unknown'} [ID: {user.id}]"
+
+    # 5. Store message in session
     session_manager.add_message(chat_id, "user", text, author=author)
 
-    msg_count = user_memory.increment_message_count(
-        user_id=user.id,
-        chat_id=chat_id,
-        username=user.username or "",
-        first_name=author,
-    )
-    if msg_count % MEMORY_UPDATE_INTERVAL == 0:
-        task = asyncio.create_task(_update_user_profile(user.id, chat_id, author))
-        task.add_done_callback(
-            lambda t: logger.error("Unhandled error in background profile update: %s", t.exception())
-            if not t.cancelled() and t.exception() is not None
-            else None
-        )
+    # 6. Check respond conditions
     is_private = update.message.chat.type == "private"
     bot_username = context.bot.username
     is_reply_to_bot = (
@@ -195,77 +132,146 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         and update.message.reply_to_message.from_user is not None
         and update.message.reply_to_message.from_user.username == bot_username
     )
-    if not is_private and not is_reply_to_bot and f"@{bot_username}" not in text:
+    is_mention = f"@{bot_username}" in text
+
+    # 7. Call should_respond_node
+    result = should_respond_node(
+        {},
+        is_private=is_private,
+        is_reply_to_bot=is_reply_to_bot,
+        is_mention=is_mention,
+    )
+    if not result["should_respond"]:
         return
 
+    # 8. Strip bot mention from question
     question = text.replace(f"@{bot_username}", "").strip() or text
 
-    history = session_manager.get_history(chat_id)
-    user_facts = user_memory.get_user_facts(user_id=user.id, limit=8)
-    if user_facts:
-        user_profile = "\n".join(f"- {fact}" for fact in user_facts)
-    else:
-        user_profile = user_memory.get_profile(user.id)
-    chat_members = user_memory.get_chat_members(chat_id)
-
-    async def send_typing():
+    # 9. Start typing indicator task
+    async def _send_typing():
         while True:
             await context.bot.send_chat_action(chat_id=chat_id, action="typing")
             await asyncio.sleep(5)
 
-    typing_task = asyncio.create_task(send_typing())
+    typing_task = asyncio.create_task(_send_typing())
 
     try:
-        # Retrieve relevant memory facts for RAG only when similarity is sufficient.
-        query_embedding = await asyncio.to_thread(gemini_client.embed_text, question)
-        fact_results = user_memory.search_facts_by_embedding(
-            query_embedding=query_embedding,
-            chat_id=chat_id,
-            asking_user_id=user.id,
-            limit=3,
-        )
-        retrieved_profiles = (
-            [_format_fact_for_prompt(fact) for fact in fact_results]
-            if fact_results
-            else None
-        )
+        # 10. Get recent messages and summary
+        recent_messages = session_manager.get_recent(chat_id)
+        summary = session_manager.get_summary(chat_id)
 
-        response, save_to_profile = await asyncio.to_thread(
-            gemini_client.ask,
-            history=history,
-            question=question,
-            user_profile=user_profile,
-            chat_members=[f"{name} [ID: {uid}]" for uid, name in chat_members],
-            retrieved_profiles=retrieved_profiles,
+        # 11. Build context messages list
+        ctx = build_context_node(
+            {"summary": summary},
+            recent_messages=recent_messages,
         )
+        messages = list(ctx["messages"])
+
+        # 12. Append current question as HumanMessage
+        messages.append(HumanMessage(content=f"[{author}]: {question}"))
+
+        # 13. Call compiled_graph.invoke via asyncio.to_thread
+        state = {
+            "messages": messages,
+            "chat_id": chat_id,
+            "user_name": author,
+            "user_id": user.id,
+            "bot_username": bot_username or "",
+            "question": question,
+            "summary": summary,
+            "should_respond": True,
+            "response_text": "",
+            "used_memory_ids": [],
+        }
+        result = await asyncio.to_thread(compiled_graph.invoke, state)
+
+        # 14. Extract response: iterate reversed messages for last AIMessage without tool_calls
+        response_text = ""
+        for msg in reversed(result["messages"]):
+            if isinstance(msg, AIMessage) and msg.content:
+                if not getattr(msg, "tool_calls", None):
+                    response_text = msg.content
+                    break
+
+        if not response_text:
+            response_text = "I couldn't generate a response. Please try again."
+
+        # 15. Cancel typing, store bot response in session
         typing_task.cancel()
-        session_manager.add_message(chat_id, "model", response, author=bot_username or "bot")
-        if fact_results:
-            user_memory.mark_facts_used([fact["fact_id"] for fact in fact_results])
+        session_manager.add_message(
+            chat_id, "model", response_text, author=bot_username or "bot"
+        )
 
-        if save_to_profile:
-            logger.info("Model flagged save_to_profile for user %s", user.id)
-            await _update_user_profile(user.id, chat_id, author)
-
-        if len(response) <= 4096:
-            await update.message.reply_text(response)
+        # 16. Send reply (with 4096-char splitting)
+        if len(response_text) <= 4096:
+            await update.message.reply_text(response_text)
         else:
-            for i in range(0, len(response), 4096):
-                await update.message.reply_text(response[i : i + 4096])
+            for i in range(0, len(response_text), 4096):
+                await update.message.reply_text(response_text[i : i + 4096])
+
+        # 17. Check if summary needed, trigger background _summarize_chat task
+        if session_manager.needs_summary(chat_id, threshold=SUMMARY_THRESHOLD):
+            task = asyncio.create_task(_summarize_chat(chat_id))
+            task.add_done_callback(
+                lambda t: logger.error(
+                    "Unhandled error in background summarization: %s", t.exception()
+                )
+                if not t.cancelled() and t.exception() is not None
+                else None
+            )
+
     except Exception:
         typing_task.cancel()
-        logger.exception("Gemini API call failed")
+        logger.exception("Graph invocation failed")
         await update.message.reply_text(
             "Sorry, something went wrong. Try again."
         )
 
 
-def _format_fact_for_prompt(fact: dict) -> str:
-    scope = fact.get("scope")
-    if scope == "chat":
-        return f"[chat fact] {fact['fact_text']}"
-    owner = fact.get("owner_name", "Unknown")
-    owner_id = fact.get("user_id")
-    if owner_id is not None:
-        return f"[user fact] {owner} [ID: {owner_id}]: {fact['fact_text']}"
-    return f"[user fact] {owner}: {fact['fact_text']}"
+# ── Background summarization ─────────────────────────────────────────
+
+
+async def _summarize_chat(chat_id: int) -> None:
+    """Generate or update a running conversation summary for *chat_id*."""
+    try:
+        unsummarized = session_manager.get_unsummarized(chat_id)
+        if not unsummarized:
+            return
+
+        new_text = "\n".join(
+            f"[{m.get('author', 'user')}]: {m['text']}" for m in unsummarized
+        )
+
+        existing_summary = session_manager.get_summary(chat_id)
+
+        if existing_summary:
+            prompt = SUMMARY_UPDATE_PROMPT.format(
+                existing_summary=existing_summary,
+                new_messages=new_text,
+            )
+        else:
+            prompt = f"{SUMMARIZE_PROMPT}\n\n{new_text}"
+
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        llm = ChatGoogleGenerativeAI(
+            model=GEMINI_MODEL,
+            google_api_key=GEMINI_API_KEY,
+            temperature=0.3,
+        )
+        result = await asyncio.to_thread(
+            llm.invoke, [HumanMessage(content=prompt)]
+        )
+
+        summary = result.content or ""
+        # Cap at SUMMARY_MAX_WORDS
+        words = summary.split()
+        if len(words) > SUMMARY_MAX_WORDS:
+            summary = " ".join(words[:SUMMARY_MAX_WORDS])
+
+        session_manager.set_summary(chat_id, summary)
+        session_manager.mark_summarized(chat_id, len(unsummarized))
+        logger.info("Updated summary for chat %s (%d messages)", chat_id, len(unsummarized))
+
+    except Exception:
+        logger.exception("Failed to summarize chat %s", chat_id)
