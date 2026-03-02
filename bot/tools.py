@@ -47,12 +47,12 @@ def create_memory_save(memory: BotMemory, embed_fn):
 
 def create_web_search(llm):
     """Return a LangChain tool that performs a Google web search via the LLM."""
+    llm_with_search = llm.bind_tools([{"google_search": {}}])
 
     @tool
     def web_search(query: str) -> str:
         """Search the web for current information (weather, news, prices, events). Use this when you need up-to-date data that wouldn't be in your memory."""
-        bound = llm.bind_tools([{"google_search": {}}])
-        response = bound.invoke(
+        response = llm_with_search.invoke(
             [HumanMessage(content=f"Search the web and answer: {query}")]
         )
         return response.content or "No results found."

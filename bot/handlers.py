@@ -18,6 +18,7 @@ from .config import (
     GEMINI_API_KEY,
     GEMINI_EMBEDDING_MODEL,
     GEMINI_MODEL,
+    MAX_AGENT_STEPS,
     MAX_HISTORY_MESSAGES,
     RECENT_WINDOW_SIZE,
     SUMMARY_MAX_WORDS,
@@ -75,7 +76,9 @@ class _LazyGraph:
     def invoke(self, state):
         if self._graph is None:
             self._init()
-        return self._graph.invoke(state)
+        return self._graph.invoke(
+            state, {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}
+        )
 
     def embed(self, text):
         if self._embeddings is None:
