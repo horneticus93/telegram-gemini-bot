@@ -18,6 +18,8 @@ services:
       context: .
       dockerfile: Dockerfile.datasette
     restart: unless-stopped
+    depends_on:
+      - bot
     ports:
       - "8001:8001"
     volumes:
