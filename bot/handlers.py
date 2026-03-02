@@ -193,7 +193,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for msg in reversed(result["messages"]):
             if isinstance(msg, AIMessage) and msg.content:
                 if not getattr(msg, "tool_calls", None):
-                    response_text = msg.content
+                    content = msg.content
+                    if isinstance(content, list):
+                        response_text = "".join(
+                            block.get("text", "")
+                            for block in content
+                            if isinstance(block, dict)
+                        )
+                    else:
+                        response_text = content
                     break
 
         if not response_text:
