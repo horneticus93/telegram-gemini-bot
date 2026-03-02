@@ -1,7 +1,7 @@
 """add_memories_table
 
 Revision ID: a3e7c1d8f5b4
-Revises: b71d5f4a9c2e
+Revises: c3d4e5f6a7b8
 Create Date: 2026-03-02 12:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a3e7c1d8f5b4"
-down_revision: Union[str, Sequence[str], None] = "b71d5f4a9c2e"
+down_revision: Union[str, Sequence[str], None] = "c3d4e5f6a7b8"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
