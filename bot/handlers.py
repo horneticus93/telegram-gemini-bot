@@ -237,12 +237,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             chat_id, has_photo, has_forward, has_url,
         )
 
-        # Download photo bytes if present
+        # Download photo bytes if present (current message or replied-to message)
         image_data: bytes | None = None
         mime_type = "image/jpeg"
-        if has_photo:
-            photo = update.message.photo[-1]
-            tg_file = await context.bot.get_file(photo.file_id)
+        reply_msg = update.message.reply_to_message
+        photo_source = (
+            update.message.photo
+            or (reply_msg.photo if reply_msg and reply_msg.photo else None)
+        )
+        if photo_source:
+            has_photo = True
+            tg_file = await context.bot.get_file(photo_source[-1].file_id)
             image_bytes = await tg_file.download_as_bytearray()
             image_data = bytes(image_bytes)
             logger.info("Photo downloaded | chat_id=%s size=%d bytes", chat_id, len(image_data))
