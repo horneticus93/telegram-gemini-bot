@@ -310,6 +310,8 @@ async def test_handle_message_returns_early_no_text(
     from bot.handlers import handle_message
 
     mock_update.message.text = None
+    mock_update.message.caption = None
+    mock_update.message.photo = []
 
     await handle_message(mock_update, mock_context)
 

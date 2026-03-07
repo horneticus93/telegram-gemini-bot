@@ -142,8 +142,16 @@ def embed_text(text: str) -> list[float]:
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process every incoming Telegram text message."""
 
-    # 1. Return early if no message text
-    if not update.message or not update.message.text:
+    # 1. Return early if no message or no actionable content
+    if not update.message:
+        return
+    text = update.message.text or update.message.caption or ""
+    has_content = bool(
+        text
+        or update.message.photo
+        or getattr(update.message, "forward_date", None) is not None
+    )
+    if not has_content:
         return
 
     chat_id = update.message.chat_id
@@ -157,8 +165,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 3. Return if no user
     if user is None:
         return
-
-    text = update.message.text
 
     # 4. Build author string
     author = f"{user.first_name or 'Unknown'} [ID: {user.id}]"

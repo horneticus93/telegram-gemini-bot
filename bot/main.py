@@ -28,7 +28,10 @@ def main() -> None:
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+        MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.FORWARDED) & ~filters.COMMAND,
+            handle_message,
+        )
     )
 
     logger.info("Bot v2.0.0 starting, polling for updates...")
