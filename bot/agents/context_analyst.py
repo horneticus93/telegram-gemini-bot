@@ -29,7 +29,8 @@ class ContextAnalyst(BaseSubAgent):
             response = await asyncio.to_thread(
                 self._llm.invoke, [HumanMessage(content=prompt)]
             )
-            data = json.loads(response.content)
+            content = response.content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(content)
             summary = data.get("summary", "")
             return SubAgentResult(
                 agent_name=self.name,
