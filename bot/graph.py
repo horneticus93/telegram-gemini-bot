@@ -96,7 +96,7 @@ def build_graph(llm, memory, embed_fn):
     tools = [
         create_memory_search(memory, embed_fn),
         create_memory_save(memory, embed_fn),
-        create_web_search(llm),
+        create_web_search(),
     ]
 
     llm_with_tools = llm.bind_tools(tools)

@@ -1,6 +1,6 @@
 """Tests for bot.tools — tool factory functions."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from bot.tools import create_memory_save, create_memory_search, create_web_search
 
@@ -89,32 +89,36 @@ class TestMemorySave:
 class TestWebSearch:
     def test_web_search_returns_content(self):
         """The web_search tool binds google_search and returns content."""
-        llm = MagicMock()
         bound_llm = MagicMock()
-        llm.bind_tools.return_value = bound_llm
-
         response = MagicMock()
         response.content = "The weather in Kyiv is 15C and sunny."
         bound_llm.invoke.return_value = response
 
-        tool_fn = create_web_search(llm)
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value = bound_llm
+
+        with patch("bot.tools.ChatGoogleGenerativeAI", return_value=mock_llm):
+            tool_fn = create_web_search()
+
         result = tool_fn.invoke({"query": "weather in Kyiv"})
 
-        llm.bind_tools.assert_called_once_with([{"google_search": {}}])
+        mock_llm.bind_tools.assert_called_once_with([{"google_search": {}}])
         assert "15C" in result
         assert "sunny" in result
 
     def test_web_search_returns_fallback_when_empty(self):
         """When LLM returns empty content, the tool returns a fallback message."""
-        llm = MagicMock()
         bound_llm = MagicMock()
-        llm.bind_tools.return_value = bound_llm
-
         response = MagicMock()
         response.content = ""
         bound_llm.invoke.return_value = response
 
-        tool_fn = create_web_search(llm)
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value = bound_llm
+
+        with patch("bot.tools.ChatGoogleGenerativeAI", return_value=mock_llm):
+            tool_fn = create_web_search()
+
         result = tool_fn.invoke({"query": "something obscure"})
 
         assert result == "No results found."

@@ -85,9 +85,8 @@ class _LazyGraph:
             model=GEMINI_EMBEDDING_MODEL,
             google_api_key=GEMINI_API_KEY,
         )
-        self._graph = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
-
         llm_flash = ChatGoogleGenerativeAI(model=GEMINI_FLASH_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
+        self._graph = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
         llm_lite = ChatGoogleGenerativeAI(model=GEMINI_FLASH_LITE_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
 
         self._orchestrator = AgentOrchestrator(

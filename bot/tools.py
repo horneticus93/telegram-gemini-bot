@@ -7,7 +7,9 @@ use in a LangGraph agent.
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
 
+from bot.config import GEMINI_API_KEY, GEMINI_FLASH_MODEL
 from bot.memory import BotMemory
 
 
@@ -45,9 +47,10 @@ def create_memory_save(memory: BotMemory, embed_fn):
     return memory_save
 
 
-def create_web_search(llm):
+def create_web_search():
     """Return a LangChain tool that performs a Google web search via the LLM."""
-    llm_with_search = llm.bind_tools([{"google_search": {}}])
+    _llm = ChatGoogleGenerativeAI(model=GEMINI_FLASH_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
+    llm_with_search = _llm.bind_tools([{"google_search": {}}])
 
     @tool
     def web_search(query: str) -> str:
