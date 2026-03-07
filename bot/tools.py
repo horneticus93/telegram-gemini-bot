@@ -48,15 +48,19 @@ def create_memory_save(memory: BotMemory, embed_fn):
 
 
 def create_web_search():
-    """Return a LangChain tool that performs a Google web search via the LLM."""
-    _llm = ChatGoogleGenerativeAI(model=GEMINI_FLASH_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
-    llm_with_search = _llm.bind_tools([{"google_search": {}}])
+    """Return a LangChain tool that performs a Google web search via grounded LLM."""
+    _llm = ChatGoogleGenerativeAI(
+        model=GEMINI_FLASH_MODEL,
+        google_api_key=GEMINI_API_KEY,
+        temperature=0.3,
+        tools=[{"google_search_retrieval": {}}],
+    )
 
     @tool
     def web_search(query: str) -> str:
         """Search the web for current information (weather, news, prices, events). Use this when you need up-to-date data that wouldn't be in your memory."""
-        response = llm_with_search.invoke(
-            [HumanMessage(content=f"Search the web and answer: {query}")]
+        response = _llm.invoke(
+            [HumanMessage(content=query)]
         )
         return response.content or "No results found."
 

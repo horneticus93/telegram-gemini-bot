@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from bot.config import GEMINI_API_KEY, GEMINI_FLASH_MODEL
 from bot.tools import create_memory_save, create_memory_search, create_web_search
 
 
@@ -88,37 +89,34 @@ class TestMemorySave:
 
 class TestWebSearch:
     def test_web_search_returns_content(self):
-        """The web_search tool binds google_search and returns content."""
-        bound_llm = MagicMock()
+        """The web_search tool uses grounded LLM and returns content."""
+        mock_llm = MagicMock()
         response = MagicMock()
         response.content = "The weather in Kyiv is 15C and sunny."
-        bound_llm.invoke.return_value = response
+        mock_llm.invoke.return_value = response
 
-        mock_llm = MagicMock()
-        mock_llm.bind_tools.return_value = bound_llm
-
-        with patch("bot.tools.ChatGoogleGenerativeAI", return_value=mock_llm):
+        with patch("bot.tools.ChatGoogleGenerativeAI", return_value=mock_llm) as mock_cls:
             tool_fn = create_web_search()
 
+        mock_cls.assert_called_once_with(
+            model=GEMINI_FLASH_MODEL,
+            google_api_key=GEMINI_API_KEY,
+            temperature=0.3,
+            tools=[{"google_search_retrieval": {}}],
+        )
         result = tool_fn.invoke({"query": "weather in Kyiv"})
-
-        mock_llm.bind_tools.assert_called_once_with([{"google_search": {}}])
         assert "15C" in result
         assert "sunny" in result
 
     def test_web_search_returns_fallback_when_empty(self):
-        """When LLM returns empty content, the tool returns a fallback message."""
-        bound_llm = MagicMock()
+        """When grounded LLM returns empty content, the tool returns a fallback message."""
+        mock_llm = MagicMock()
         response = MagicMock()
         response.content = ""
-        bound_llm.invoke.return_value = response
-
-        mock_llm = MagicMock()
-        mock_llm.bind_tools.return_value = bound_llm
+        mock_llm.invoke.return_value = response
 
         with patch("bot.tools.ChatGoogleGenerativeAI", return_value=mock_llm):
             tool_fn = create_web_search()
 
         result = tool_fn.invoke({"query": "something obscure"})
-
         assert result == "No results found."
