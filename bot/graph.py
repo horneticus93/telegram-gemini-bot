@@ -55,11 +55,10 @@ def build_context_node(state: dict, *, recent_messages: list[dict]) -> dict:
         )
 
     for msg in recent_messages:
-        content = f"[{msg['author']}]: {msg['text']}"
         if msg["role"] == "user":
-            messages.append(HumanMessage(content=content))
+            messages.append(HumanMessage(content=f"[{msg['author']}]: {msg['text']}"))
         else:
-            messages.append(AIMessage(content=content))
+            messages.append(AIMessage(content=msg["text"]))
 
     return {"messages": messages}
 
