@@ -10,9 +10,10 @@ from telegram.ext import Application, MessageHandler, filters
 from .config import TELEGRAM_BOT_TOKEN, GEMINI_API_KEY
 from .handlers import handle_message, bot_memory
 
+_log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=_log_level,
 )
 logger = logging.getLogger(__name__)
 

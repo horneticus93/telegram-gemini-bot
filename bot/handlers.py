@@ -7,6 +7,7 @@ lazily (graph/LLM/embeddings) so imports work without an API key.
 
 import asyncio
 import logging
+import time
 
 from langchain_core.messages import AIMessage, HumanMessage
 from telegram import Update
@@ -162,6 +163,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 4. Build author string
     author = f"{user.first_name or 'Unknown'} [ID: {user.id}]"
 
+    logger.info(
+        "Message received | chat_id=%s author=%r type=%s text=%r",
+        chat_id, author, update.message.chat.type, text[:120],
+    )
+
     # 5. Store message in session
     session_manager.add_message(chat_id, "user", text, author=author)
 
@@ -183,7 +189,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         is_mention=is_mention,
     )
     if not result["should_respond"]:
+        logger.info(
+            "Not responding | chat_id=%s private=%s reply=%s mention=%s",
+            chat_id, is_private, is_reply_to_bot, is_mention,
+        )
         return
+
+    logger.info(
+        "Responding | chat_id=%s private=%s reply=%s mention=%s",
+        chat_id, is_private, is_reply_to_bot, is_mention,
+    )
 
     # 8. Strip bot mention from question
     question = text.replace(f"@{bot_username}", "").strip() or text
@@ -196,14 +211,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     typing_task = asyncio.create_task(_send_typing())
 
+    t_start = time.monotonic()
+
     try:
         # 10. Get recent messages and summary
         recent_messages = session_manager.get_recent(chat_id)
         summary = session_manager.get_summary(chat_id)
+        logger.info(
+            "Session context | chat_id=%s recent=%d has_summary=%s",
+            chat_id, len(recent_messages), bool(summary),
+        )
 
         # 10b. Detect content types
         has_photo = bool(update.message.photo)
         has_forward = getattr(update.message, "forward_date", None) is not None
+        has_url = bool(__import__("re").search(r"https?://", text))
+        logger.info(
+            "Content detection | chat_id=%s has_photo=%s has_forward=%s has_url=%s",
+            chat_id, has_photo, has_forward, has_url,
+        )
 
         # Download photo bytes if present
         image_data: bytes | None = None
@@ -213,6 +239,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             tg_file = await context.bot.get_file(photo.file_id)
             image_bytes = await tg_file.download_as_bytearray()
             image_data = bytes(image_bytes)
+            logger.info("Photo downloaded | chat_id=%s size=%d bytes", chat_id, len(image_data))
 
         forwarded_text = ""
         forward_from = None
@@ -221,8 +248,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             origin = update.message.forward_origin
             if hasattr(origin, "sender_user") and origin.sender_user:
                 forward_from = origin.sender_user.first_name
+            logger.info("Forward detected | chat_id=%s from=%r", chat_id, forward_from)
 
         # Run sub-agent orchestrator
+        logger.info("Orchestrator starting | chat_id=%s", chat_id)
+        t_orch = time.monotonic()
         pre_context = await compiled_graph.orchestrate(
             text=question,
             chat_id=chat_id,
@@ -233,6 +263,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             mime_type=mime_type,
             forwarded_text=forwarded_text,
             forward_from=forward_from,
+        )
+        logger.info(
+            "Orchestrator done | chat_id=%s elapsed=%.2fs pre_context_len=%d",
+            chat_id, time.monotonic() - t_orch, len(pre_context),
         )
 
         # 11. Build context messages list
@@ -246,6 +280,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         messages.append(HumanMessage(content=f"[{author}]: {question}"))
 
         # 13. Call compiled_graph.invoke via asyncio.to_thread
+        logger.info("Main agent invoked | chat_id=%s messages=%d", chat_id, len(messages))
+        t_agent = time.monotonic()
         state = {
             "messages": messages,
             "chat_id": chat_id,
@@ -260,6 +296,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "pre_context": pre_context,
         }
         result = await asyncio.to_thread(compiled_graph.invoke, state)
+        logger.info(
+            "Main agent done | chat_id=%s elapsed=%.2fs",
+            chat_id, time.monotonic() - t_agent,
+        )
 
         # 14. Extract response: iterate reversed messages for last AIMessage without tool_calls
         response_text = ""
@@ -287,6 +327,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
         # 16. Send reply (with 4096-char splitting)
+        parts = (len(response_text) + 4095) // 4096
+        logger.info(
+            "Sending reply | chat_id=%s length=%d parts=%d total_elapsed=%.2fs",
+            chat_id, len(response_text), parts, time.monotonic() - t_start,
+        )
         if len(response_text) <= 4096:
             await update.message.reply_text(response_text)
         else:
@@ -295,6 +340,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # 17. Check if summary needed, trigger background _summarize_chat task
         if session_manager.needs_summary(chat_id, threshold=SUMMARY_THRESHOLD):
+            logger.info("Triggering background summarization | chat_id=%s", chat_id)
             task = asyncio.create_task(_summarize_chat(chat_id))
             task.add_done_callback(
                 lambda t: logger.error(
@@ -306,7 +352,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except Exception:
         typing_task.cancel()
-        logger.exception("Graph invocation failed")
+        logger.exception("Graph invocation failed | chat_id=%s elapsed=%.2fs", chat_id, time.monotonic() - t_start)
         await update.message.reply_text(
             "Sorry, something went wrong. Try again."
         )
@@ -321,6 +367,7 @@ async def _summarize_chat(chat_id: int) -> None:
         unsummarized = session_manager.get_unsummarized(chat_id)
         if not unsummarized:
             return
+        logger.info("Summarization started | chat_id=%s messages=%d", chat_id, len(unsummarized))
 
         new_text = "\n".join(
             f"[{m.get('author', 'user')}]: {m['text']}" for m in unsummarized
