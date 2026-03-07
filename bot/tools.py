@@ -5,9 +5,9 @@ function, LLM) and returns a ``@tool``-decorated callable ready for
 use in a LangGraph agent.
 """
 
-from langchain_core.messages import HumanMessage
+from google import genai
+from google.genai import types
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from bot.config import GEMINI_API_KEY, GEMINI_FLASH_MODEL
 from bot.memory import BotMemory
@@ -48,20 +48,21 @@ def create_memory_save(memory: BotMemory, embed_fn):
 
 
 def create_web_search():
-    """Return a LangChain tool that performs a Google web search via grounded LLM."""
-    _llm = ChatGoogleGenerativeAI(
-        model=GEMINI_FLASH_MODEL,
-        google_api_key=GEMINI_API_KEY,
+    """Return a LangChain tool that performs a grounded Google web search."""
+    _client = genai.Client(api_key=GEMINI_API_KEY)
+    _search_config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
         temperature=0.3,
-        tools=[{"google_search_retrieval": {}}],
     )
 
     @tool
     def web_search(query: str) -> str:
         """Search the web for current information (weather, news, prices, events). Use this when you need up-to-date data that wouldn't be in your memory."""
-        response = _llm.invoke(
-            [HumanMessage(content=query)]
+        response = _client.models.generate_content(
+            model=GEMINI_FLASH_MODEL,
+            contents=query,
+            config=_search_config,
         )
-        return response.content or "No results found."
+        return response.text or "No results found."
 
     return web_search
