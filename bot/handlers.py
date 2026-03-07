@@ -17,7 +17,7 @@ from .config import (
     DB_PATH,
     GEMINI_API_KEY,
     GEMINI_EMBEDDING_MODEL,
-    GEMINI_MODEL,
+    GEMINI_FLASH_MODEL,
     MAX_AGENT_STEPS,
     MAX_HISTORY_MESSAGES,
     RECENT_WINDOW_SIZE,
@@ -54,15 +54,28 @@ class _LazyGraph:
         self._graph = None
         self._llm = None
         self._embeddings = None
+        self._orchestrator = None
 
     def _init(self):
         from langchain_google_genai import (
             ChatGoogleGenerativeAI,
             GoogleGenerativeAIEmbeddings,
         )
+        from bot.config import (
+            GEMINI_PRO_MODEL, GEMINI_FLASH_MODEL, GEMINI_FLASH_LITE_MODEL,
+            SUBAGENT_TIMEOUT, MEMORY_RETRIEVER_TOP_K, MENTION_DETECTOR_CONFIDENCE,
+            MAX_LINKS_PER_MESSAGE,
+        )
+        from bot.agents.orchestrator import AgentOrchestrator
+        from bot.agents.mention_detector import MentionDetector
+        from bot.agents.memory_retriever import MemoryRetriever
+        from bot.agents.context_analyst import ContextAnalyst
+        from bot.agents.image_analyzer import ImageAnalyzer
+        from bot.agents.link_extractor import LinkExtractor
+        from bot.agents.repost_analyzer import RepostAnalyzer
 
         self._llm = ChatGoogleGenerativeAI(
-            model=GEMINI_MODEL,
+            model=GEMINI_PRO_MODEL,
             google_api_key=GEMINI_API_KEY,
             temperature=0.7,
             max_retries=2,
@@ -72,6 +85,19 @@ class _LazyGraph:
             google_api_key=GEMINI_API_KEY,
         )
         self._graph = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
+
+        llm_flash = ChatGoogleGenerativeAI(model=GEMINI_FLASH_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
+        llm_lite = ChatGoogleGenerativeAI(model=GEMINI_FLASH_LITE_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
+
+        self._orchestrator = AgentOrchestrator(
+            mention_detector=MentionDetector(llm=llm_lite, confidence_threshold=MENTION_DETECTOR_CONFIDENCE),
+            memory_retriever=MemoryRetriever(memory=bot_memory, embed_fn=self._embeddings.embed_query, top_k=MEMORY_RETRIEVER_TOP_K),
+            context_analyst=ContextAnalyst(llm=llm_lite),
+            image_analyzer=ImageAnalyzer(llm=llm_flash),
+            link_extractor=LinkExtractor(llm=llm_lite, max_links=MAX_LINKS_PER_MESSAGE),
+            repost_analyzer=RepostAnalyzer(llm=llm_lite),
+            memory=bot_memory,
+        )
 
     def invoke(self, state):
         if self._graph is None:
@@ -84,6 +110,18 @@ class _LazyGraph:
         if self._embeddings is None:
             self._init()
         return self._embeddings.embed_query(text)
+
+    async def orchestrate(self, *, text, chat_id, recent_messages, has_photo, has_forward,
+                           image_data=None, mime_type="image/jpeg",
+                           forwarded_text="", forward_from=None) -> str:
+        if self._orchestrator is None:
+            self._init()
+        return await self._orchestrator.build_pre_context(
+            text=text, chat_id=chat_id, recent_messages=recent_messages,
+            has_photo=has_photo, has_forward=has_forward,
+            image_data=image_data, mime_type=mime_type,
+            forwarded_text=forwarded_text, forward_from=forward_from,
+        )
 
 
 compiled_graph = _LazyGraph()
@@ -163,6 +201,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         recent_messages = session_manager.get_recent(chat_id)
         summary = session_manager.get_summary(chat_id)
 
+        # 10b. Detect content types
+        has_photo = bool(update.message.photo)
+        has_forward = getattr(update.message, "forward_date", None) is not None
+
+        # Download photo bytes if present
+        image_data: bytes | None = None
+        mime_type = "image/jpeg"
+        if has_photo:
+            photo = update.message.photo[-1]
+            tg_file = await context.bot.get_file(photo.file_id)
+            image_bytes = await tg_file.download_as_bytearray()
+            image_data = bytes(image_bytes)
+
+        forwarded_text = ""
+        forward_from = None
+        if has_forward and update.message.forward_origin:
+            forwarded_text = text
+            origin = update.message.forward_origin
+            if hasattr(origin, "sender_user") and origin.sender_user:
+                forward_from = origin.sender_user.first_name
+
+        # Run sub-agent orchestrator
+        pre_context = await compiled_graph.orchestrate(
+            text=question,
+            chat_id=chat_id,
+            recent_messages=recent_messages,
+            has_photo=has_photo,
+            has_forward=has_forward,
+            image_data=image_data,
+            mime_type=mime_type,
+            forwarded_text=forwarded_text,
+            forward_from=forward_from,
+        )
+
         # 11. Build context messages list
         ctx = build_context_node(
             {"summary": summary},
@@ -185,6 +257,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "should_respond": True,
             "response_text": "",
             "used_memory_ids": [],
+            "pre_context": pre_context,
         }
         result = await asyncio.to_thread(compiled_graph.invoke, state)
 
@@ -266,7 +339,7 @@ async def _summarize_chat(chat_id: int) -> None:
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         llm = ChatGoogleGenerativeAI(
-            model=GEMINI_MODEL,
+            model=GEMINI_FLASH_MODEL,
             google_api_key=GEMINI_API_KEY,
             temperature=0.3,
         )

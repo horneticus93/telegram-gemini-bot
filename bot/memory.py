@@ -293,3 +293,39 @@ class BotMemory:
                 (_now_iso(), memory_id),
             )
             conn.commit()
+
+    # ── chat_config ────────────────────────────────────────────────
+
+    def get_bot_aliases(self, chat_id: int) -> list[str]:
+        """Return the list of bot aliases known for this chat."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT bot_aliases FROM chat_config WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+        if not row:
+            return []
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def add_bot_alias(self, chat_id: int, alias: str) -> None:
+        """Add *alias* to the bot alias list for *chat_id* (deduplicating)."""
+        aliases = self.get_bot_aliases(chat_id)
+        if alias in aliases:
+            return
+        aliases.append(alias)
+        now = _now_iso()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_config (chat_id, bot_aliases, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    bot_aliases = excluded.bot_aliases,
+                    updated_at  = excluded.updated_at
+                """,
+                (chat_id, json.dumps(aliases), now, now),
+            )
+            conn.commit()

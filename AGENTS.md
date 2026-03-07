@@ -3,6 +3,8 @@
 This file is the primary guidance for AI coding agents working in this repository.
 If you edit code here, follow these project-specific rules before generic habits.
 
+**Language rule:** All documentation, comments, commit messages, and code in this repository must be written in English.
+
 ## Project Snapshot
 
 - Runtime: async Telegram bot (`python-telegram-bot`) with LangGraph + Gemini.
@@ -23,6 +25,19 @@ bot/tools.py      - memory_search, memory_save, web_search tool factories
 bot/memory.py     - SQLite BotMemory (global memories table)
 bot/session.py    - in-memory chat history with summarization
 bot/prompts.py    - system prompt, summarization prompts
+bot/agents/         - sub-agent package
+  base.py           - SubAgentResult dataclass, BaseSubAgent
+  orchestrator.py   - AgentOrchestrator (wires all sub-agents)
+  intent_classifier.py - heuristic intent detection (no LLM)
+  mention_detector.py  - Flash-Lite: detects if bot is addressed
+  memory_retriever.py  - Flash-Lite: semantic memory search
+  context_analyst.py   - Flash-Lite: tone/topic analysis
+  image_analyzer.py    - Flash: vision image description
+  link_extractor.py    - Flash-Lite: URL content extraction
+  repost_analyzer.py   - Flash-Lite: forwarded message summary
+  memory_watcher.py    - Flash-Lite: identifies facts to save
+  relevance_judge.py   - Flash-Lite: filters irrelevant results
+  prompts.py          - all sub-agent prompts
 alembic/          - schema migration system
 tests/            - pytest suite
 ```
@@ -33,12 +48,81 @@ tests/            - pytest suite
 2. `handle_message` in `bot/handlers.py`:
    - stores incoming message in session;
    - checks respond conditions (private chat, reply-to-bot, bot mention in group).
-3. If responding: builds context (summary + recent messages), invokes LangGraph agent.
-4. Agent may use tools: `memory_search`, `memory_save`, `web_search`.
-5. Response extracted, sent to Telegram.
-6. Background summarization triggered if threshold met.
+3. If responding: builds context (summary + recent messages), runs AgentOrchestrator.
+4. Orchestrator runs sub-agents in parallel:
+   - Always: mention_detector, memory_retriever, context_analyst
+   - Conditional: image_analyzer (if photo), link_extractor (if URL), repost_analyzer (if forward)
+5. Orchestrator pre-context brief is prepended to main agent's system prompt.
+6. Main agent (gemini-2.5-pro) may also call tools: memory_save, web_search.
+7. Response extracted, sent to Telegram.
+8. Background summarization triggered if threshold met.
 
 Do not break this control flow without updating tests accordingly.
+
+## Agent System Architecture
+
+```
+Telegram message
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  handle_message()  [bot/handlers.py]                        │
+│                                                             │
+│  1. Store in session                                        │
+│  2. Check respond conditions                                │
+│  3. Detect content: has_photo / has_forward / URLs          │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  AgentOrchestrator  [bot/agents/orchestrator.py]            │
+│                                                             │
+│  ┌─ ALWAYS (parallel) ───────────────────────────────┐     │
+│  │  mention_detector   Flash-Lite  is bot addressed? │     │
+│  │  memory_retriever   Flash-Lite  relevant memories │     │
+│  │  context_analyst    Flash-Lite  tone & topics     │     │
+│  └───────────────────────────────────────────────────┘     │
+│                                                             │
+│  ┌─ CONDITIONAL (parallel) ──────────────────────────┐     │
+│  │  image_analyzer     Flash       if photo present  │     │
+│  │  link_extractor     Flash-Lite  if URL in text    │     │
+│  │  repost_analyzer    Flash-Lite  if forwarded msg  │     │
+│  └───────────────────────────────────────────────────┘     │
+│                                                             │
+│  → new bot alias discovered → save to chat_config           │
+│  → format pre-context brief (string)                        │
+└──────────────────────┬──────────────────────────────────────┘
+                       │  pre_context brief
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Main Agent  [bot/graph.py]   gemini-2.5-pro                │
+│                                                             │
+│  System prompt = SYSTEM_PROMPT + pre_context brief          │
+│                                                             │
+│  ┌─ ON-DEMAND tools ─────────────────────────────────┐     │
+│  │  memory_save   persist important fact             │     │
+│  │  web_search    fetch current information          │     │
+│  └───────────────────────────────────────────────────┘     │
+│                                                             │
+│  → generates final response                                 │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+              Telegram reply
+                       │
+                       ▼ (background)
+              _summarize_chat()  gemini-2.0-flash
+```
+
+**Models by role:**
+
+| Role | Model | Env var |
+|---|---|---|
+| Main agent | gemini-2.5-pro | `GEMINI_PRO_MODEL` |
+| image_analyzer | gemini-2.0-flash | `GEMINI_FLASH_MODEL` |
+| Summarization | gemini-2.0-flash | `GEMINI_FLASH_MODEL` |
+| All other sub-agents | gemini-2.0-flash-lite | `GEMINI_FLASH_LITE_MODEL` |
+| Embeddings | gemini-embedding-001 | `GEMINI_EMBEDDING_MODEL` |
 
 ## Memory Architecture
 
@@ -47,6 +131,8 @@ Do not break this control flow without updating tests accordingly.
 - Semantic search via embedding cosine similarity.
 - Scoring: 0.60 semantic + 0.25 recency + 0.15 importance.
 - Cooldown anti-repetition.
+- `chat_config` table: per-chat bot alias list (`get_bot_aliases`, `add_bot_alias` in `BotMemory`).
+- Bot learns its name in each chat dynamically (stored as JSON list in `chat_config.bot_aliases`).
 
 Notes:
 - Embeddings are stored as JSON text, not native vector type.
@@ -76,10 +162,18 @@ Notes:
   - `GEMINI_API_KEY`
   - `ALLOWED_CHAT_IDS`
 - Supported config vars with defaults:
-  - `GEMINI_MODEL` (default: `gemini-2.5-flash`)
   - `GEMINI_EMBEDDING_MODEL` (default: `gemini-embedding-001`)
   - `MAX_HISTORY_MESSAGES` (default: `50`)
   - `DB_PATH` (default: `/app/data/memory.db`)
+  - `GEMINI_PRO_MODEL` (default: `gemini-2.5-pro`) — main agent model
+  - `GEMINI_FLASH_MODEL` (default: `gemini-2.0-flash`) — flash sub-agents
+  - `GEMINI_FLASH_LITE_MODEL` (default: `gemini-2.0-flash-lite`) — lite sub-agents
+  - `ORCHESTRATOR_TIMEOUT` (default: `15`) — max seconds for full pipeline
+  - `SUBAGENT_TIMEOUT` (default: `8`) — max seconds per sub-agent
+  - `MAX_LINKS_PER_MESSAGE` (default: `3`)
+  - `MENTION_DETECTOR_CONFIDENCE` (default: `0.7`)
+  - `MEMORY_RETRIEVER_TOP_K` (default: `5`)
+  - `RELEVANCE_JUDGE_THRESHOLD` (default: `0.6`)
 - If you introduce/change env vars:
   1. update `.env.example`,
   2. update `README.md` configuration docs,

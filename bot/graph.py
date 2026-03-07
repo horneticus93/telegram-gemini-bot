@@ -103,7 +103,11 @@ def build_graph(llm, memory, embed_fn):
     llm_with_tools = llm.bind_tools(tools)
 
     def agent_node(state: dict) -> dict:
-        sys_msg = SystemMessage(content=SYSTEM_PROMPT)
+        pre_context = state.get("pre_context", "")
+        system_content = SYSTEM_PROMPT
+        if pre_context:
+            system_content = SYSTEM_PROMPT + f"\n\n## Pre-context from sub-agents\n{pre_context}"
+        sys_msg = SystemMessage(content=system_content)
         response = llm_with_tools.invoke([sys_msg] + list(state["messages"]))
         return {"messages": [response]}
 

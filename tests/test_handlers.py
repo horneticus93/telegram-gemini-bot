@@ -39,6 +39,7 @@ def mock_context():
     context.bot = MagicMock()
     context.bot.username = "testbot"
     context.bot.send_chat_action = AsyncMock()
+    context.bot.get_file = AsyncMock(return_value=MagicMock(download_as_bytearray=AsyncMock(return_value=bytearray())))
     return context
 
 
@@ -56,6 +57,7 @@ async def test_handle_message_responds_on_mention(
     """Bot replies when @mentioned in a group chat."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     # Setup session_manager mocks
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
@@ -123,6 +125,7 @@ async def test_handle_message_responds_in_private_chat(
     """Bot always responds in private chats regardless of mention."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_update.message.text = "hello there"
     mock_update.message.chat.type = "private"
     mock_session.get_recent.return_value = []
@@ -150,6 +153,7 @@ async def test_handle_message_responds_on_reply_to_bot(
     """Bot responds when someone replies to one of its messages."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_update.message.text = "can you elaborate?"
     reply_msg = MagicMock()
     reply_msg.from_user = MagicMock()
@@ -181,6 +185,7 @@ async def test_handle_message_strips_bot_mention(
     """@bot mention is stripped from the question before sending to graph."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_update.message.text = "@testbot what is 2+2?"
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
@@ -212,6 +217,7 @@ async def test_handle_message_stores_bot_response_in_session(
     """Bot response is stored in session as a 'model' message."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -243,6 +249,7 @@ async def test_handle_message_extracts_last_ai_message_without_tool_calls(
     """Response is the LAST AIMessage without tool_calls, not the first."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -275,6 +282,7 @@ async def test_handle_message_splits_long_response(
     """Responses longer than 4096 characters are split into multiple messages."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -337,6 +345,7 @@ async def test_handle_message_sends_typing_action(
     """Typing indicator is sent while processing."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -362,6 +371,7 @@ async def test_handle_message_triggers_summary_when_needed(
     """Background summarization is triggered when threshold is met."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = True
@@ -398,6 +408,7 @@ async def test_handle_message_adds_user_message_to_session(
     """User message is stored in session with correct author format."""
     from bot.handlers import handle_message
 
+    mock_graph.orchestrate = AsyncMock(return_value="")
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False

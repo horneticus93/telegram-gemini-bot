@@ -2,10 +2,15 @@
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 
 from bot.memory import BotMemory, _clamp01, _cosine_similarity, _now_iso, _parse_ts
+
+_PROJECT_ROOT = Path(__file__).parent.parent
 
 
 @pytest.fixture
@@ -14,6 +19,18 @@ def mem(tmp_path):
     m = BotMemory(db_path=db_path)
     m.init_db()
     return m
+
+
+@pytest.fixture
+def tmp_db(tmp_path, monkeypatch):
+    """BotMemory instance with a fully migrated temp DB (Alembic)."""
+    db_path = str(tmp_path / "test.db")
+    # Remove DB_PATH so alembic/env.py uses the URL we set, not conftest's temp DB.
+    monkeypatch.delenv("DB_PATH", raising=False)
+    alembic_cfg = Config(str(_PROJECT_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(alembic_cfg, "head")
+    return BotMemory(db_path=db_path)
 
 
 # ── Helper function tests ──────────────────────────────────────────────
@@ -471,3 +488,27 @@ class TestScoringAndRanking:
         results = mem.search_memories(query_embedding=emb, limit=5)
         assert results[0]["content"] == "High importance"
         assert results[0]["score"] > results[1]["score"]
+
+
+# ── chat_config: bot aliases ───────────────────────────────────────────
+
+
+def test_get_bot_aliases_empty(tmp_db):
+    """Returns empty list when chat has no config."""
+    aliases = tmp_db.get_bot_aliases(chat_id=999)
+    assert aliases == []
+
+
+def test_save_and_get_bot_alias(tmp_db):
+    """Saves an alias and retrieves it."""
+    tmp_db.add_bot_alias(chat_id=100, alias="Гена")
+    aliases = tmp_db.get_bot_aliases(chat_id=100)
+    assert "Гена" in aliases
+
+
+def test_add_bot_alias_deduplicates(tmp_db):
+    """Adding same alias twice doesn't duplicate."""
+    tmp_db.add_bot_alias(chat_id=100, alias="Коля")
+    tmp_db.add_bot_alias(chat_id=100, alias="Коля")
+    aliases = tmp_db.get_bot_aliases(chat_id=100)
+    assert aliases.count("Коля") == 1

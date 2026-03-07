@@ -15,3 +15,4 @@ class BotState(TypedDict):
     should_respond: bool
     response_text: str
     used_memory_ids: list[int]
+    pre_context: str
