@@ -187,23 +187,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     is_mention = f"@{bot_username}" in text
 
+    # Check if any stored bot alias appears in the text (name-based addressing)
+    bot_aliases = await asyncio.to_thread(bot_memory.get_bot_aliases, chat_id)
+    text_lower = text.lower()
+    is_named = any(alias.lower() in text_lower for alias in bot_aliases)
+    if is_named:
+        logger.info("Bot addressed by alias | chat_id=%s aliases=%s", chat_id, bot_aliases)
+
     # 7. Call should_respond_node
     result = should_respond_node(
         {},
         is_private=is_private,
         is_reply_to_bot=is_reply_to_bot,
-        is_mention=is_mention,
+        is_mention=is_mention or is_named,
     )
     if not result["should_respond"]:
         logger.info(
-            "Not responding | chat_id=%s private=%s reply=%s mention=%s",
-            chat_id, is_private, is_reply_to_bot, is_mention,
+            "Not responding | chat_id=%s private=%s reply=%s mention=%s named=%s",
+            chat_id, is_private, is_reply_to_bot, is_mention, is_named,
         )
         return
 
     logger.info(
-        "Responding | chat_id=%s private=%s reply=%s mention=%s",
-        chat_id, is_private, is_reply_to_bot, is_mention,
+        "Responding | chat_id=%s private=%s reply=%s mention=%s named=%s",
+        chat_id, is_private, is_reply_to_bot, is_mention, is_named,
     )
 
     # 8. Strip bot mention from question

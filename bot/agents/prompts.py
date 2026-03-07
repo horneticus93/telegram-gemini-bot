@@ -12,7 +12,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 
 - is_addressed: true if the message is directed at the bot (by alias, context, or implicit reference)
 - confidence: how confident you are (0.0 = not sure, 1.0 = certain)
-- new_alias: if a new name for the bot is used that is NOT in the aliases list, return it; otherwise null
+- new_alias: if the message assigns or introduces a new name for the bot (e.g. "your name is X", "I'll call you X", "you are X") OR uses a name not in the aliases list to address the bot — return that name; otherwise null
 """
 
 MEMORY_RETRIEVER_PROMPT = """\

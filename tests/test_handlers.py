@@ -10,6 +10,15 @@ from telegram.ext import ContextTypes
 # ── Fixtures ───────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def mock_bot_memory():
+    """Patch bot_memory so tests don't need a real DB with chat_config table."""
+    memory = MagicMock()
+    memory.get_bot_aliases.return_value = []
+    with patch("bot.handlers.bot_memory", memory):
+        yield memory
+
+
 @pytest.fixture
 def mock_update():
     user = MagicMock(spec=User)
