@@ -66,7 +66,7 @@ async def test_handle_message_responds_on_mention(
     """Bot replies when @mentioned in a group chat."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     # Setup session_manager mocks
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
@@ -134,7 +134,7 @@ async def test_handle_message_responds_in_private_chat(
     """Bot always responds in private chats regardless of mention."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_update.message.text = "hello there"
     mock_update.message.chat.type = "private"
     mock_session.get_recent.return_value = []
@@ -162,7 +162,7 @@ async def test_handle_message_responds_on_reply_to_bot(
     """Bot responds when someone replies to one of its messages."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_update.message.text = "can you elaborate?"
     reply_msg = MagicMock()
     reply_msg.from_user = MagicMock()
@@ -194,7 +194,7 @@ async def test_handle_message_strips_bot_mention(
     """@bot mention is stripped from the question before sending to graph."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_update.message.text = "@testbot what is 2+2?"
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
@@ -226,7 +226,7 @@ async def test_handle_message_stores_bot_response_in_session(
     """Bot response is stored in session as a 'model' message."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -258,7 +258,7 @@ async def test_handle_message_extracts_last_ai_message_without_tool_calls(
     """Response is the LAST AIMessage without tool_calls, not the first."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -291,7 +291,7 @@ async def test_handle_message_splits_long_response(
     """Responses longer than 4096 characters are split into multiple messages."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -356,7 +356,7 @@ async def test_handle_message_sends_typing_action(
     """Typing indicator is sent while processing."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -382,7 +382,7 @@ async def test_handle_message_triggers_summary_when_needed(
     """Background summarization is triggered when threshold is met."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = True
@@ -419,7 +419,7 @@ async def test_handle_message_adds_user_message_to_session(
     """User message is stored in session with correct author format."""
     from bot.handlers import handle_message
 
-    mock_graph.orchestrate = AsyncMock(return_value="")
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
     mock_session.get_recent.return_value = []
     mock_session.get_summary.return_value = ""
     mock_session.needs_summary.return_value = False
@@ -434,3 +434,53 @@ async def test_handle_message_adds_user_message_to_session(
     assert user_call[0][0] == -100123  # chat_id
     assert user_call[0][1] == "user"   # role
     assert user_call[1]["author"] == "Alice [ID: 42]"
+
+
+@pytest.mark.asyncio
+@patch("bot.handlers.ALLOWED_CHAT_IDS", {-100123})
+@patch("bot.handlers.session_manager")
+@patch("bot.handlers.bot_memory")
+@patch("bot.handlers.compiled_graph")
+async def test_handle_message_passes_complexity_to_invoke(
+    mock_graph, mock_memory, mock_session, mock_update, mock_context
+):
+    """complexity from orchestrate is forwarded to compiled_graph.invoke."""
+    from bot.handlers import handle_message
+
+    mock_graph.orchestrate = AsyncMock(return_value=("", "simple"))
+    mock_session.get_recent.return_value = []
+    mock_session.get_summary.return_value = ""
+    mock_session.needs_summary.return_value = False
+
+    ai_response = AIMessage(content="ok")
+    mock_graph.invoke.return_value = {"messages": [ai_response]}
+
+    await handle_message(mock_update, mock_context)
+
+    invoke_call = mock_graph.invoke.call_args
+    assert invoke_call[0][1] == "simple"
+
+
+@pytest.mark.asyncio
+@patch("bot.handlers.ALLOWED_CHAT_IDS", {-100123})
+@patch("bot.handlers.session_manager")
+@patch("bot.handlers.bot_memory")
+@patch("bot.handlers.compiled_graph")
+async def test_handle_message_passes_complex_to_invoke(
+    mock_graph, mock_memory, mock_session, mock_update, mock_context
+):
+    """complex complexity is forwarded to compiled_graph.invoke."""
+    from bot.handlers import handle_message
+
+    mock_graph.orchestrate = AsyncMock(return_value=("", "complex"))
+    mock_session.get_recent.return_value = []
+    mock_session.get_summary.return_value = ""
+    mock_session.needs_summary.return_value = False
+
+    ai_response = AIMessage(content="ok")
+    mock_graph.invoke.return_value = {"messages": [ai_response]}
+
+    await handle_message(mock_update, mock_context)
+
+    invoke_call = mock_graph.invoke.call_args
+    assert invoke_call[0][1] == "complex"

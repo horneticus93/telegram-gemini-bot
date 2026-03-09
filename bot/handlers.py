@@ -313,7 +313,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Run sub-agent orchestrator
         logger.info("Orchestrator starting | chat_id=%s", chat_id)
         t_orch = time.monotonic()
-        pre_context = await compiled_graph.orchestrate(
+        pre_context, complexity = await compiled_graph.orchestrate(
             text=question,
             chat_id=chat_id,
             recent_messages=recent_messages,
@@ -327,6 +327,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info(
             "Orchestrator done | chat_id=%s elapsed=%.2fs pre_context_len=%d",
             chat_id, time.monotonic() - t_orch, len(pre_context),
+        )
+        logger.info(
+            "Model routing | chat_id=%s complexity=%s", chat_id, complexity
         )
 
         # 11. Build context messages list
@@ -355,7 +358,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "used_memory_ids": [],
             "pre_context": pre_context,
         }
-        result = await asyncio.to_thread(compiled_graph.invoke, state)
+        result = await asyncio.to_thread(compiled_graph.invoke, state, complexity)
         logger.info(
             "Main agent done | chat_id=%s elapsed=%.2fs",
             chat_id, time.monotonic() - t_agent,
