@@ -8,6 +8,7 @@ class SessionManager:
         self._sessions: dict[int, deque] = {}
         self._summaries: dict[int, str] = {}
         self._summarized_count: dict[int, int] = {}
+        self._memory_watched_count: dict[int, int] = {}
 
     def add_message(self, chat_id: int, role: str, text: str, author: str | None = None) -> None:
         """Add a message to the session.
@@ -51,6 +52,21 @@ class SessionManager:
     def set_summary(self, chat_id: int, summary: str) -> None:
         """Store a running summary for a chat."""
         self._summaries[chat_id] = summary
+
+    def get_unwatched(self, chat_id: int) -> list[dict]:
+        """Return messages that have not yet been processed by memory_watcher."""
+        history = self.get_history(chat_id)
+        offset = self._memory_watched_count.get(chat_id, 0)
+        return history[offset:]
+
+    def mark_memory_watched(self, chat_id: int, count: int) -> None:
+        """Advance the memory-watch pointer by ``count`` messages."""
+        current = self._memory_watched_count.get(chat_id, 0)
+        self._memory_watched_count[chat_id] = current + count
+
+    def needs_memory_watch(self, chat_id: int, threshold: int) -> bool:
+        """Return True if the number of unwatched messages meets the threshold."""
+        return len(self.get_unwatched(chat_id)) >= threshold
 
     def needs_summary(self, chat_id: int, threshold: int = 30) -> bool:
         """Return True if the number of unsummarized messages meets the threshold."""

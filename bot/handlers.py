@@ -56,6 +56,7 @@ class _LazyGraph:
         self._llm = None
         self._embeddings = None
         self._orchestrator = None
+        self._memory_watcher = None
 
     def _init(self):
         from langchain_google_genai import (
@@ -74,6 +75,7 @@ class _LazyGraph:
         from bot.agents.image_analyzer import ImageAnalyzer
         from bot.agents.link_extractor import LinkExtractor
         from bot.agents.repost_analyzer import RepostAnalyzer
+        from bot.agents.memory_watcher import MemoryWatcher
 
         self._llm = ChatGoogleGenerativeAI(
             model=GEMINI_PRO_MODEL,
@@ -88,6 +90,12 @@ class _LazyGraph:
         llm_flash = ChatGoogleGenerativeAI(model=GEMINI_FLASH_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
         self._graph = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
         llm_lite = ChatGoogleGenerativeAI(model=GEMINI_FLASH_LITE_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
+
+        self._memory_watcher = MemoryWatcher(
+            llm=llm_lite,
+            memory=bot_memory,
+            embed_fn=self._embeddings.embed_query,
+        )
 
         self._orchestrator = AgentOrchestrator(
             mention_detector=MentionDetector(llm=llm_lite, confidence_threshold=MENTION_DETECTOR_CONFIDENCE),
@@ -111,6 +119,11 @@ class _LazyGraph:
             self._init()
         return self._embeddings.embed_query(text)
 
+    async def run_memory_watcher(self, messages: list[dict]):
+        if self._memory_watcher is None:
+            self._init()
+        return await self._memory_watcher.run(messages=messages)
+
     async def orchestrate(self, *, text, chat_id, recent_messages, has_photo, has_forward,
                            image_data=None, mime_type="image/jpeg",
                            forwarded_text="", forward_from=None) -> str:
@@ -133,6 +146,38 @@ compiled_graph = _LazyGraph()
 def embed_text(text: str) -> list[float]:
     """Generate an embedding vector for *text* via the lazy graph embeddings."""
     return compiled_graph.embed(text)
+
+
+# ── Memory watcher ───────────────────────────────────────────────────
+
+
+async def _run_memory_watcher(chat_id: int, messages: list[dict]) -> None:
+    """Run memory_watcher on a batch of messages and advance the pointer."""
+    try:
+        result = await compiled_graph.run_memory_watcher(messages)
+        session_manager.mark_memory_watched(chat_id, len(messages))
+        logger.info(
+            "Memory watcher done | chat_id=%s messages=%d saved=%s",
+            chat_id, len(messages), result.metadata.get("saved", 0) if result else "?",
+        )
+    except Exception:
+        logger.exception("Memory watcher failed | chat_id=%s", chat_id)
+
+
+def _maybe_trigger_memory_watcher(chat_id: int) -> None:
+    """Start a background memory-watch task if the unwatched threshold is met."""
+    if not session_manager.needs_memory_watch(chat_id, threshold=RECENT_WINDOW_SIZE):
+        return
+    messages = session_manager.get_unwatched(chat_id)
+    logger.info("Triggering background memory_watcher | chat_id=%s messages=%d", chat_id, len(messages))
+    task = asyncio.create_task(_run_memory_watcher(chat_id, messages))
+    task.add_done_callback(
+        lambda t: logger.error(
+            "Unhandled error in background memory_watcher: %s", t.exception()
+        )
+        if not t.cancelled() and t.exception() is not None
+        else None
+    )
 
 
 # ── Main message handler ─────────────────────────────────────────────
@@ -205,6 +250,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "Not responding | chat_id=%s private=%s reply=%s mention=%s named=%s",
             chat_id, is_private, is_reply_to_bot, is_mention, is_named,
         )
+        _maybe_trigger_memory_watcher(chat_id)
         return
 
     logger.info(
@@ -355,7 +401,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for i in range(0, len(response_text), 4096):
                 await update.message.reply_text(response_text[i : i + 4096])
 
-        # 17. Check if summary needed, trigger background _summarize_chat task
+        # 17. Trigger background memory watcher if threshold reached
+        _maybe_trigger_memory_watcher(chat_id)
+
+        # 18. Check if summary needed, trigger background _summarize_chat task
         if session_manager.needs_summary(chat_id, threshold=SUMMARY_THRESHOLD):
             logger.info("Triggering background summarization | chat_id=%s", chat_id)
             task = asyncio.create_task(_summarize_chat(chat_id))

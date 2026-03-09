@@ -192,3 +192,66 @@ def test_format_history_empty_chat():
     """format_history returns empty string for unknown chat."""
     sm = SessionManager()
     assert sm.format_history(999) == ""
+
+
+def test_get_unwatched_messages():
+    """get_unwatched returns messages not yet processed by memory_watcher."""
+    sm = SessionManager(max_messages=50, recent_window=15)
+    for i in range(10):
+        sm.add_message(1, "user", f"msg{i}")
+
+    assert len(sm.get_unwatched(1)) == 10
+
+    sm.mark_memory_watched(1, 5)
+    unwatched = sm.get_unwatched(1)
+    assert len(unwatched) == 5
+    assert [m["text"] for m in unwatched] == ["msg5", "msg6", "msg7", "msg8", "msg9"]
+
+
+def test_get_unwatched_empty_chat():
+    """get_unwatched returns empty list for unknown chat."""
+    sm = SessionManager()
+    assert sm.get_unwatched(999) == []
+
+
+def test_mark_memory_watched_cumulative():
+    """mark_memory_watched is cumulative — advances the pointer correctly."""
+    sm = SessionManager(max_messages=50, recent_window=15)
+    for i in range(10):
+        sm.add_message(1, "user", f"msg{i}")
+
+    sm.mark_memory_watched(1, 3)
+    assert len(sm.get_unwatched(1)) == 7
+
+    sm.mark_memory_watched(1, 4)
+    assert len(sm.get_unwatched(1)) == 3
+    assert [m["text"] for m in sm.get_unwatched(1)] == ["msg7", "msg8", "msg9"]
+
+
+def test_needs_memory_watch():
+    """needs_memory_watch returns True when unwatched count meets threshold."""
+    sm = SessionManager(max_messages=100, recent_window=15)
+
+    assert sm.needs_memory_watch(1, threshold=15) is False
+
+    for i in range(14):
+        sm.add_message(1, "user", f"msg{i}")
+    assert sm.needs_memory_watch(1, threshold=15) is False
+
+    sm.add_message(1, "user", "msg14")
+    assert sm.needs_memory_watch(1, threshold=15) is True
+
+    sm.mark_memory_watched(1, 15)
+    assert sm.needs_memory_watch(1, threshold=15) is False
+
+
+def test_memory_watch_isolated_per_chat():
+    """Memory watch pointer is isolated per chat."""
+    sm = SessionManager(max_messages=100, recent_window=15)
+    for i in range(5):
+        sm.add_message(1, "user", f"c1msg{i}")
+        sm.add_message(2, "user", f"c2msg{i}")
+
+    sm.mark_memory_watched(1, 3)
+    assert len(sm.get_unwatched(1)) == 2
+    assert len(sm.get_unwatched(2)) == 5

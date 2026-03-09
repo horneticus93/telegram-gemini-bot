@@ -48,14 +48,15 @@ tests/            - pytest suite
 2. `handle_message` in `bot/handlers.py`:
    - stores incoming message in session;
    - checks respond conditions (private chat, reply-to-bot, bot mention in group).
-3. If responding: builds context (summary + recent messages), runs AgentOrchestrator.
-4. Orchestrator runs sub-agents in parallel:
+3. After every message (regardless of responding): `_maybe_trigger_memory_watcher()` checks if `RECENT_WINDOW_SIZE` unwatched messages have accumulated. If yes, launches `_run_memory_watcher()` in background.
+4. If responding: builds context (summary + recent messages), runs AgentOrchestrator.
+5. Orchestrator runs sub-agents in parallel:
    - Always: mention_detector, memory_retriever, context_analyst
    - Conditional: image_analyzer (if photo), link_extractor (if URL), repost_analyzer (if forward)
-5. Orchestrator pre-context brief is prepended to main agent's system prompt.
-6. Main agent (gemini-2.5-pro) may also call tools: memory_save, web_search.
-7. Response extracted, sent to Telegram.
-8. Background summarization triggered if threshold met.
+6. Orchestrator pre-context brief is prepended to main agent's system prompt.
+7. Main agent (gemini-2.5-pro) may also call tools: memory_save, web_search.
+8. Response extracted, sent to Telegram.
+9. Background summarization triggered if threshold met.
 
 Do not break this control flow without updating tests accordingly.
 
@@ -110,8 +111,21 @@ Telegram message
                        ▼
               Telegram reply
                        │
-                       ▼ (background)
-              _summarize_chat()  gemini-2.0-flash
+                       ├──────────────────────────────────────────────────┐
+                       ▼ (background, always)                             ▼ (background, if threshold)
+      _maybe_trigger_memory_watcher()                         _summarize_chat()  gemini-2.0-flash
+               │
+               │  every RECENT_WINDOW_SIZE unwatched messages
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MemoryWatcher  [bot/agents/memory_watcher.py]              │
+│                                                             │
+│  Flash-Lite analyzes the batch of unwatched messages        │
+│  → extracts 0–3 important facts (or nothing)               │
+│  → saves each fact via BotMemory.save_or_update()           │
+│    (near-duplicate detection threshold: cosine ≥ 0.85)      │
+│  → advances SessionManager memory-watch pointer             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 **Models by role:**
@@ -123,6 +137,44 @@ Telegram message
 | Summarization | gemini-2.0-flash | `GEMINI_FLASH_MODEL` |
 | All other sub-agents | gemini-2.0-flash-lite | `GEMINI_FLASH_LITE_MODEL` |
 | Embeddings | gemini-embedding-001 | `GEMINI_EMBEDDING_MODEL` |
+
+## Passive Memory Watch
+
+The bot observes every message in allowed chats, even when not responding. Facts are extracted and saved in batches:
+
+- **Trigger:** after every message (responding or not), `_maybe_trigger_memory_watcher(chat_id)` checks if the number of **unwatched** messages has reached `RECENT_WINDOW_SIZE`.
+- **Batch:** `SessionManager.get_unwatched(chat_id)` returns messages since the last watch pointer. The pointer advances via `mark_memory_watched()` after a successful run.
+- **Extraction:** `MemoryWatcher` (Flash-Lite) receives the raw batch and returns 0–3 facts as JSON. If nothing important was said, it returns `[]` and nothing is saved.
+- **Dedup:** each fact is embedded and passed to `BotMemory.save_or_update()`. If cosine similarity ≥ 0.85 with an existing memory, the existing record is updated instead of inserting a duplicate.
+- **Pointer state:** tracked in `SessionManager._memory_watched_count` (in-memory, per chat, separate from the summarization pointer).
+
+```
+Every message
+      │
+      ▼
+_maybe_trigger_memory_watcher(chat_id)
+      │
+      │  unwatched < RECENT_WINDOW_SIZE?
+      │─────────────────────────────────► (skip, return)
+      │
+      │  unwatched >= RECENT_WINDOW_SIZE
+      ▼
+_run_memory_watcher(chat_id, messages)   [background task]
+      │
+      ▼
+MemoryWatcher.run(messages)   Flash-Lite
+      │
+      │  JSON: [{fact, importance}, ...]   (0–3 items, or [])
+      ▼
+for each fact:
+  embed(fact)  →  BotMemory.save_or_update()
+                        │
+                        ├── cosine(existing) ≥ 0.85 → UPDATE existing row
+                        └── no near-duplicate      → INSERT new row
+      │
+      ▼
+SessionManager.mark_memory_watched(chat_id, len(messages))
+```
 
 ## Memory Architecture
 
