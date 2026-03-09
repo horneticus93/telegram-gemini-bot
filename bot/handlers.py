@@ -52,7 +52,8 @@ class _LazyGraph:
     """
 
     def __init__(self):
-        self._graph = None
+        self._graph_pro = None
+        self._graph_flash = None
         self._llm = None
         self._embeddings = None
         self._orchestrator = None
@@ -92,7 +93,8 @@ class _LazyGraph:
             google_api_key=GEMINI_API_KEY,
         )
         llm_flash = ChatGoogleGenerativeAI(model=GEMINI_FLASH_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
-        self._graph = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
+        self._graph_pro = build_graph(self._llm, bot_memory, self._embeddings.embed_query)
+        self._graph_flash = build_graph(llm_flash, bot_memory, self._embeddings.embed_query)
         llm_lite = ChatGoogleGenerativeAI(model=GEMINI_FLASH_LITE_MODEL, google_api_key=GEMINI_API_KEY, temperature=0.3)
 
         self._memory_watcher = MemoryWatcher(
@@ -114,10 +116,11 @@ class _LazyGraph:
         )
         self._subagent_timeout = SUBAGENT_TIMEOUT
 
-    def invoke(self, state):
-        if self._graph is None:
+    def invoke(self, state, complexity: str = "complex"):
+        if self._graph_pro is None:
             self._init()
-        return self._graph.invoke(
+        graph = self._graph_flash if complexity == "simple" else self._graph_pro
+        return graph.invoke(
             state, {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}
         )
 
@@ -128,7 +131,7 @@ class _LazyGraph:
 
     async def orchestrate(self, *, text, chat_id, recent_messages, has_photo, has_forward,
                            image_data=None, mime_type="image/jpeg",
-                           forwarded_text="", forward_from=None) -> str:
+                           forwarded_text="", forward_from=None) -> tuple[str, str]:
         if self._orchestrator is None:
             self._init()
         return await self._orchestrator.build_pre_context(
