@@ -53,8 +53,12 @@ tests/            - pytest suite
 5. Orchestrator runs sub-agents in parallel:
    - Always: mention_detector, memory_retriever, context_analyst
    - Conditional: image_analyzer (if photo), link_extractor (if URL), repost_analyzer (if forward)
-6. Orchestrator pre-context brief is prepended to main agent's system prompt.
-7. Main agent (gemini-2.5-pro) may also call tools: memory_save, web_search.
+   ...
+6. Orchestrator returns (pre_context_brief, complexity).
+   complexity = "simple" | "complex" (heuristic, no LLM, from IntentClassifier).
+7. Main agent model selected by complexity:
+   - "simple" → gemini-2.0-flash  (GEMINI_FLASH_MODEL)
+   - "complex" → gemini-2.5-pro   (GEMINI_PRO_MODEL)
 8. Response extracted, sent to Telegram.
 9. Background summarization triggered if threshold met.
 
@@ -132,11 +136,29 @@ Telegram message
 
 | Role | Model | Env var |
 |---|---|---|
-| Main agent | gemini-2.5-pro | `GEMINI_PRO_MODEL` |
+| Main agent (complex queries) | gemini-2.5-pro | `GEMINI_PRO_MODEL` |
+| Main agent (simple queries) | gemini-2.0-flash | `GEMINI_FLASH_MODEL` |
 | image_analyzer | gemini-2.0-flash | `GEMINI_FLASH_MODEL` |
 | Summarization | gemini-2.0-flash | `GEMINI_FLASH_MODEL` |
 | All other sub-agents | gemini-2.0-flash-lite | `GEMINI_FLASH_LITE_MODEL` |
 | Embeddings | gemini-embedding-001 | `GEMINI_EMBEDDING_MODEL` |
+
+## Complexity Classification
+
+`IntentClassifier` (`bot/agents/intent_classifier.py`) classifies each query as `simple` or `complex` using pure heuristics (no LLM). Rules evaluated top-to-bottom; first match wins. Default: `complex`.
+
+| Condition | Result |
+|---|---|
+| `has_photo` / `has_url` / `has_forward` | complex |
+| intent == `"request"` | complex |
+| `len(text) > 150` | complex |
+| technical keyword (UA/EN/RU) | complex |
+| web-search keyword (UA/EN/RU) | complex |
+| _(none of the above)_ | **simple** |
+
+**Technical keywords:** `функція`, `алгоритм`, `порахуй`, `обчисли`, `поясни`, `перекладіть` / `код`, `code`, `function`, `algorithm`, `calculate`, `explain`, `translate` / `функция`, `алгоритм`, `посчитай`, `объясни`, `переведи`
+
+**Web-search keywords:** `погода`, `ціна`, `новини`, `сьогодні`, `зараз`, `курс` / `weather`, `price`, `news`, `today`, `now`, `rate` / `погода`, `цена`, `новости`, `сегодня`, `сейчас`, `курс`
 
 ## Passive Memory Watch
 
