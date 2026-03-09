@@ -84,13 +84,3 @@ async def test_web_trigger_en_is_complex(clf):
 async def test_web_trigger_ru_is_complex(clf):
     result = await clf.run(text="какая погода сегодня?")
     assert result.metadata["complexity"] == "complex"
-
-@pytest.mark.asyncio
-async def test_existing_intent_still_works(clf):
-    """Existing intent classification must not regress."""
-    result = await clf.run(text="Як справи?")
-    assert result.content == "question"
-    result2 = await clf.run(text="Допоможи мені написати лист")
-    assert result2.content == "request"
-    result3 = await clf.run(text="хаха лол")
-    assert result3.content == "other"

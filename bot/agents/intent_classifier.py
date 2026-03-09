@@ -13,9 +13,9 @@ _REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 _TECHNICAL_RE = re.compile(
-    r"(код|кодь|функція|алгоритм|порахуй|обчисли|поясни|перекладіть"
-    r"|code|function|algorithm|calculate|explain|translate"
-    r"|код|функция|алгоритм|посчитай|объясни|переведи)",
+    r"(функція|алгоритм|порахуй|обчисли|поясни|перекладіть"
+    r"|код|code|function|algorithm|calculate|explain|translate"
+    r"|функция|алгоритм|посчитай|объясни|переведи)",
     re.IGNORECASE,
 )
 _WEB_RE = re.compile(
