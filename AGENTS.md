@@ -28,7 +28,7 @@ bot/prompts.py    - system prompt, summarization prompts
 bot/agents/         - sub-agent package
   base.py           - SubAgentResult dataclass, BaseSubAgent
   orchestrator.py   - AgentOrchestrator (wires all sub-agents)
-  intent_classifier.py - heuristic intent detection (no LLM)
+  intent_classifier.py - heuristic intent + complexity detection (no LLM)
   mention_detector.py  - Flash-Lite: detects if bot is addressed
   memory_retriever.py  - Flash-Lite: semantic memory search
   context_analyst.py   - Flash-Lite: tone/topic analysis
@@ -51,14 +51,14 @@ tests/            - pytest suite
 3. After every message (regardless of responding): `_maybe_trigger_memory_watcher()` checks if `RECENT_WINDOW_SIZE` unwatched messages have accumulated. If yes, launches `_run_memory_watcher()` in background.
 4. If responding: builds context (summary + recent messages), runs AgentOrchestrator.
 5. Orchestrator runs sub-agents in parallel:
-   - Always: mention_detector, memory_retriever, context_analyst
-   - Conditional: image_analyzer (if photo), link_extractor (if URL), repost_analyzer (if forward)
-   ...
-6. Orchestrator returns (pre_context_brief, complexity).
-   complexity = "simple" | "complex" (heuristic, no LLM, from IntentClassifier).
+   - Always: `intent_classifier` (heuristic, no LLM), `mention_detector`, `memory_retriever`, `context_analyst`
+   - Conditional: `image_analyzer` (if photo), `link_extractor` (if URL), `repost_analyzer` (if forward)
+   - Results filtered by `relevance_judge` (except `intent_classifier` and `mention_detector`, always kept)
+6. Orchestrator returns `(pre_context_brief, complexity)`.
+   `complexity = "simple" | "complex"` — from `IntentClassifier` heuristics, no LLM, default `"complex"`.
 7. Main agent model selected by complexity:
-   - "simple" → gemini-2.0-flash  (GEMINI_FLASH_MODEL)
-   - "complex" → gemini-2.5-pro   (GEMINI_PRO_MODEL)
+   - `"simple"` → `gemini-2.0-flash`  (`GEMINI_FLASH_MODEL`)
+   - `"complex"` → `gemini-2.5-pro`   (`GEMINI_PRO_MODEL`)
 8. Response extracted, sent to Telegram.
 9. Background summarization triggered if threshold met.
 
@@ -83,6 +83,7 @@ Telegram message
 │  AgentOrchestrator  [bot/agents/orchestrator.py]            │
 │                                                             │
 │  ┌─ ALWAYS (parallel) ───────────────────────────────┐     │
+│  │  intent_classifier  (no LLM)  intent + complexity │     │
 │  │  mention_detector   Flash-Lite  is bot addressed? │     │
 │  │  memory_retriever   Flash-Lite  relevant memories │     │
 │  │  context_analyst    Flash-Lite  tone & topics     │     │
@@ -94,13 +95,23 @@ Telegram message
 │  │  repost_analyzer    Flash-Lite  if forwarded msg  │     │
 │  └───────────────────────────────────────────────────┘     │
 │                                                             │
+│  → relevance_judge filters results (Flash-Lite)             │
 │  → new bot alias discovered → save to chat_config           │
-│  → format pre-context brief (string)                        │
+│  → returns (pre_context_brief, complexity)                  │
 └──────────────────────┬──────────────────────────────────────┘
-                       │  pre_context brief
+                       │  (pre_context, complexity)
                        ▼
+             complexity == "simple"?
+                  │           │
+                 yes          no
+                  │           │
+                  ▼           ▼
+        gemini-2.0-flash   gemini-2.5-pro
+                  │           │
+                  └─────┬─────┘
+                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Main Agent  [bot/graph.py]   gemini-2.5-pro                │
+│  Main Agent  [bot/graph.py]                                 │
 │                                                             │
 │  System prompt = SYSTEM_PROMPT + pre_context brief          │
 │                                                             │
@@ -159,6 +170,29 @@ Telegram message
 **Technical keywords:** `функція`, `алгоритм`, `порахуй`, `обчисли`, `поясни`, `перекладіть` / `код`, `code`, `function`, `algorithm`, `calculate`, `explain`, `translate` / `функция`, `алгоритм`, `посчитай`, `объясни`, `переведи`
 
 **Web-search keywords:** `погода`, `ціна`, `новини`, `сьогодні`, `зараз`, `курс` / `weather`, `price`, `news`, `today`, `now`, `rate` / `погода`, `цена`, `новости`, `сегодня`, `сейчас`, `курс`
+
+```
+IntentClassifier.run(text, has_photo, has_url, has_forward)
+        │
+        ▼
+  has_photo / has_url / has_forward? ──yes──► complex
+        │ no
+        ▼
+  intent == "request"? ────────────────yes──► complex
+        │ no
+        ▼
+  len(text) > 150? ────────────────────yes──► complex
+        │ no
+        ▼
+  technical keyword match? ────────────yes──► complex
+        │ no
+        ▼
+  web-search keyword match? ───────────yes──► complex
+        │ no
+        ▼
+      simple  ──────────────────────────────► gemini-2.0-flash
+    (complex) ──────────────────────────────► gemini-2.5-pro
+```
 
 ## Passive Memory Watch
 
