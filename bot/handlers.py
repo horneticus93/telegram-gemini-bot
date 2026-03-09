@@ -57,6 +57,7 @@ class _LazyGraph:
         self._embeddings = None
         self._orchestrator = None
         self._memory_watcher = None
+        self._subagent_timeout: float = 8.0
 
     def _init(self):
         from langchain_google_genai import (
@@ -76,6 +77,9 @@ class _LazyGraph:
         from bot.agents.link_extractor import LinkExtractor
         from bot.agents.repost_analyzer import RepostAnalyzer
         from bot.agents.memory_watcher import MemoryWatcher
+        from bot.agents.intent_classifier import IntentClassifier
+        from bot.agents.relevance_judge import RelevanceJudge
+        from bot.config import RELEVANCE_JUDGE_THRESHOLD
 
         self._llm = ChatGoogleGenerativeAI(
             model=GEMINI_PRO_MODEL,
@@ -104,8 +108,11 @@ class _LazyGraph:
             image_analyzer=ImageAnalyzer(llm=llm_flash),
             link_extractor=LinkExtractor(llm=llm_lite, max_links=MAX_LINKS_PER_MESSAGE),
             repost_analyzer=RepostAnalyzer(llm=llm_lite),
+            intent_classifier=IntentClassifier(),
+            relevance_judge=RelevanceJudge(llm=llm_lite, threshold=RELEVANCE_JUDGE_THRESHOLD),
             memory=bot_memory,
         )
+        self._subagent_timeout = SUBAGENT_TIMEOUT
 
     def invoke(self, state):
         if self._graph is None:
@@ -113,11 +120,6 @@ class _LazyGraph:
         return self._graph.invoke(
             state, {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}
         )
-
-    def embed(self, text):
-        if self._embeddings is None:
-            self._init()
-        return self._embeddings.embed_query(text)
 
     async def run_memory_watcher(self, messages: list[dict]):
         if self._memory_watcher is None:
@@ -134,18 +136,11 @@ class _LazyGraph:
             has_photo=has_photo, has_forward=has_forward,
             image_data=image_data, mime_type=mime_type,
             forwarded_text=forwarded_text, forward_from=forward_from,
+            subagent_timeout=self._subagent_timeout,
         )
 
 
 compiled_graph = _LazyGraph()
-
-
-# ── Public helpers ────────────────────────────────────────────────────
-
-
-def embed_text(text: str) -> list[float]:
-    """Generate an embedding vector for *text* via the lazy graph embeddings."""
-    return compiled_graph.embed(text)
 
 
 # ── Memory watcher ───────────────────────────────────────────────────
@@ -283,10 +278,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # 10b. Detect content types
         has_photo = bool(update.message.photo)
         has_forward = getattr(update.message, "forward_date", None) is not None
-        has_url = bool(__import__("re").search(r"https?://", text))
         logger.info(
-            "Content detection | chat_id=%s has_photo=%s has_forward=%s has_url=%s",
-            chat_id, has_photo, has_forward, has_url,
+            "Content detection | chat_id=%s has_photo=%s has_forward=%s",
+            chat_id, has_photo, has_forward,
         )
 
         # Download photo bytes if present (current message or replied-to message)

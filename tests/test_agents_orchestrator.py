@@ -23,6 +23,19 @@ def mock_agents():
     return mention, memory, context
 
 
+def _make_intent_mock():
+    intent = AsyncMock()
+    intent.run.return_value = SubAgentResult(agent_name="intent_classifier", content="question")
+    return intent
+
+
+def _make_relevance_mock(pass_through=True):
+    """Returns a RelevanceJudge mock that passes all results through by default."""
+    judge = AsyncMock()
+    judge.run.side_effect = lambda *, text, sub_agent_results, **kwargs: sub_agent_results
+    return judge
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_runs_always_on_agents(mock_agents):
     mention, memory, context = mock_agents
@@ -33,6 +46,8 @@ async def test_orchestrator_runs_always_on_agents(mock_agents):
         image_analyzer=None,
         link_extractor=None,
         repost_analyzer=None,
+        intent_classifier=_make_intent_mock(),
+        relevance_judge=_make_relevance_mock(),
         memory=MagicMock(),
     )
     brief = await orch.build_pre_context(
@@ -59,6 +74,8 @@ async def test_orchestrator_skips_image_when_no_photo(mock_agents):
         image_analyzer=image_agent,
         link_extractor=None,
         repost_analyzer=None,
+        intent_classifier=_make_intent_mock(),
+        relevance_judge=_make_relevance_mock(),
         memory=MagicMock(),
     )
     await orch.build_pre_context(

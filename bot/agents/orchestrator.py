@@ -11,6 +11,8 @@ from .context_analyst import ContextAnalyst
 from .image_analyzer import ImageAnalyzer
 from .link_extractor import URL_RE, LinkExtractor
 from .repost_analyzer import RepostAnalyzer
+from .intent_classifier import IntentClassifier
+from .relevance_judge import RelevanceJudge
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,8 @@ class AgentOrchestrator:
         image_analyzer: ImageAnalyzer | None,
         link_extractor: LinkExtractor | None,
         repost_analyzer: RepostAnalyzer | None,
+        intent_classifier: IntentClassifier,
+        relevance_judge: RelevanceJudge,
         memory,
     ):
         self._mention = mention_detector
@@ -33,6 +37,8 @@ class AgentOrchestrator:
         self._image = image_analyzer
         self._links = link_extractor
         self._repost = repost_analyzer
+        self._intent = intent_classifier
+        self._relevance = relevance_judge
         self._memory = memory
 
     async def build_pre_context(
@@ -53,11 +59,12 @@ class AgentOrchestrator:
         bot_aliases = await asyncio.to_thread(self._memory.get_bot_aliases, chat_id)
 
         # Always-on agents
-        always_on_names = ["mention_detector", "memory_retriever", "context_analyst"]
+        always_on_names = ["mention_detector", "memory_retriever", "context_analyst", "intent_classifier"]
         always_on_coros = [
             self._mention.run(text=text, bot_aliases=bot_aliases, chat_id=chat_id),
             self._memory_retriever.run(text=text),
             self._context.run(recent_messages=recent_messages),
+            self._intent.run(text=text),
         ]
 
         # Conditional agents
@@ -106,6 +113,16 @@ class AgentOrchestrator:
             "Sub-agents complete | chat_id=%s total=%.2fs succeeded=%d/%d",
             chat_id, time.monotonic() - t0, len(results), len(all_names),
         )
+
+        # Filter results through relevance judge (preserves intent_classifier and mention_detector unconditionally)
+        always_pass = {"mention_detector", "intent_classifier"}
+        to_judge = [r for r in results if r.agent_name not in always_pass]
+        preserved = [r for r in results if r.agent_name in always_pass]
+        if to_judge:
+            judged = await self._relevance.run(text=text, sub_agent_results=to_judge)
+            results = preserved + judged
+        else:
+            results = preserved
 
         # Handle new bot alias discovery
         for r in results:
