@@ -54,8 +54,11 @@ class AgentOrchestrator:
         forwarded_text: str = "",
         forward_from: str | None = None,
         subagent_timeout: float = 8.0,
-    ) -> str:
-        """Run all applicable sub-agents and return a formatted pre-context string."""
+    ) -> tuple[str, str]:
+        """Run all applicable sub-agents and return a formatted pre-context string.
+
+        Returns a tuple of (pre_context_str, complexity) where complexity is "simple" or "complex".
+        """
         bot_aliases = await asyncio.to_thread(self._memory.get_bot_aliases, chat_id)
 
         # Always-on agents
@@ -64,7 +67,12 @@ class AgentOrchestrator:
             self._mention.run(text=text, bot_aliases=bot_aliases, chat_id=chat_id),
             self._memory_retriever.run(text=text),
             self._context.run(recent_messages=recent_messages),
-            self._intent.run(text=text),
+            self._intent.run(
+                text=text,
+                has_photo=has_photo,
+                has_url=bool(self._links and URL_RE.search(text)),
+                has_forward=has_forward,
+            ),
         ]
 
         # Conditional agents
@@ -109,6 +117,12 @@ class AgentOrchestrator:
         raw_results = await asyncio.gather(*[safe_run(n, c) for n, c in zip(all_names, all_coros)])
         results: list[SubAgentResult] = [r for r in raw_results if r is not None]
 
+        complexity = "complex"  # safe default
+        for r in raw_results:
+            if r is not None and r.agent_name == "intent_classifier":
+                complexity = r.metadata.get("complexity", "complex")
+                break
+
         logger.info(
             "Sub-agents complete | chat_id=%s total=%.2fs succeeded=%d/%d",
             chat_id, time.monotonic() - t0, len(results), len(all_names),
@@ -138,7 +152,7 @@ class AgentOrchestrator:
                     logger.info("New bot alias saved | chat_id=%s alias=%r", chat_id, new_alias)
                 break
 
-        return self._format_brief(results)
+        return self._format_brief(results), complexity
 
     def _format_brief(self, results: list[SubAgentResult]) -> str:
         sections: list[str] = []
