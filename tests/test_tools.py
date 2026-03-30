@@ -1,118 +1,65 @@
-"""Tests for bot.tools — tool factory functions."""
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+from bot.tools import execute_tool, TOOL_DEFINITIONS
 
-from unittest.mock import MagicMock, patch
+@pytest.mark.asyncio
+async def test_memory_add_calls_merge_and_embed():
+    graph = AsyncMock()
+    graph.merge_node = AsyncMock(return_value=42)
+    embeddings = AsyncMock()
+    embeddings.save = AsyncMock()
 
-from bot.tools import create_memory_save, create_memory_search, create_web_search
+    result = await execute_tool(
+        "memory_add",
+        {"subject": "Oleh", "relation": "LIVES_IN", "object": "Berlin",
+         "subject_type": "Person", "object_type": "Place"},
+        graph=graph, embeddings=embeddings,
+    )
+    graph.merge_node.assert_called()
+    assert "saved" in result.lower()
 
+@pytest.mark.asyncio
+async def test_memory_search_returns_formatted():
+    embeddings = AsyncMock()
+    embeddings.search_text = AsyncMock(return_value=[1, 2])
+    graph = AsyncMock()
+    graph.search_by_ids = AsyncMock(return_value=[{"name": "Oleh"}, {"name": "Berlin"}])
 
-# ── memory_search tool ────────────────────────────────────────────────
+    result = await execute_tool(
+        "memory_search",
+        {"query": "where does Oleh live"},
+        graph=graph, embeddings=embeddings,
+    )
+    assert "Oleh" in result
 
+@pytest.mark.asyncio
+async def test_memory_delete_removes_node():
+    graph = AsyncMock()
+    graph.delete_node = AsyncMock()
+    result = await execute_tool(
+        "memory_delete",
+        {"node_id": 42},
+        graph=graph, embeddings=AsyncMock(),
+    )
+    graph.delete_node.assert_called_once_with(42)
+    assert "deleted" in result.lower()
 
-class TestMemorySearch:
-    def test_memory_search_returns_results(self):
-        """When search_memories returns results, the tool formats them and
-        calls mark_used with the ids."""
-        memory = MagicMock()
-        embed_fn = MagicMock(return_value=[0.1, 0.2, 0.3])
-        memory.search_memories.return_value = [
-            {"id": 1, "content": "Alice works at Google", "importance": 0.8, "score": 0.9},
-            {"id": 2, "content": "Bob likes hiking", "importance": 0.6, "score": 0.7},
-        ]
-
-        tool_fn = create_memory_search(memory, embed_fn)
-        result = tool_fn.invoke({"query": "who works at Google"})
-
-        embed_fn.assert_called_once_with("who works at Google")
-        memory.search_memories.assert_called_once_with(
-            query_embedding=[0.1, 0.2, 0.3], limit=5, cooldown_seconds=900
+@pytest.mark.asyncio
+async def test_web_search_calls_tavily():
+    with patch("tavily.AsyncTavilyClient") as MockClient:
+        mock_instance = AsyncMock()
+        MockClient.return_value = mock_instance
+        mock_instance.search = AsyncMock(return_value={
+            "results": [{"title": "Berlin", "content": "Capital of Germany", "url": "https://example.com"}]
+        })
+        result = await execute_tool(
+            "web_search",
+            {"query": "Berlin"},
+            graph=AsyncMock(), embeddings=AsyncMock(),
+            tavily_key="fake_key",
         )
-        memory.mark_used.assert_called_once_with([1, 2])
-        assert "Alice works at Google" in result
-        assert "Bob likes hiking" in result
+    assert "Berlin" in result
 
-    def test_memory_search_returns_nothing_found(self):
-        """When search_memories returns [], the tool returns a no-results message."""
-        memory = MagicMock()
-        embed_fn = MagicMock(return_value=[0.1, 0.2, 0.3])
-        memory.search_memories.return_value = []
-
-        tool_fn = create_memory_search(memory, embed_fn)
-        result = tool_fn.invoke({"query": "unknown topic"})
-
-        embed_fn.assert_called_once_with("unknown topic")
-        memory.search_memories.assert_called_once()
-        memory.mark_used.assert_not_called()
-        assert result == "No memories found for this query."
-
-
-# ── memory_save tool ──────────────────────────────────────────────────
-
-
-class TestMemorySave:
-    def test_memory_save_calls_save_or_update(self):
-        """The save tool embeds the text and delegates to save_or_update."""
-        memory = MagicMock()
-        embed_fn = MagicMock(return_value=[0.4, 0.5, 0.6])
-        memory.save_or_update.return_value = "inserted"
-
-        tool_fn = create_memory_save(memory, embed_fn)
-        result = tool_fn.invoke({"memory_text": "Alice works at Google since 2023"})
-
-        embed_fn.assert_called_once_with("Alice works at Google since 2023")
-        memory.save_or_update.assert_called_once_with(
-            content="Alice works at Google since 2023",
-            embedding=[0.4, 0.5, 0.6],
-            importance=0.5,
-        )
-        assert result == "inserted"
-
-    def test_memory_save_with_custom_importance(self):
-        """When importance is provided, it passes through to save_or_update."""
-        memory = MagicMock()
-        embed_fn = MagicMock(return_value=[0.1, 0.2])
-        memory.save_or_update.return_value = "updated"
-
-        tool_fn = create_memory_save(memory, embed_fn)
-        result = tool_fn.invoke({"memory_text": "Important fact", "importance": 0.9})
-
-        memory.save_or_update.assert_called_once_with(
-            content="Important fact",
-            embedding=[0.1, 0.2],
-            importance=0.9,
-        )
-        assert result == "updated"
-
-
-# ── web_search tool ───────────────────────────────────────────────────
-
-
-class TestWebSearch:
-    def test_web_search_returns_content(self):
-        """The web_search tool uses grounded genai client and returns content."""
-        mock_response = MagicMock()
-        mock_response.text = "The weather in Kyiv is 15C and sunny."
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content.return_value = mock_response
-
-        with patch("bot.tools.genai.Client", return_value=mock_client):
-            tool_fn = create_web_search()
-
-        result = tool_fn.invoke({"query": "weather in Kyiv"})
-        mock_client.models.generate_content.assert_called_once()
-        assert "15C" in result
-        assert "sunny" in result
-
-    def test_web_search_returns_fallback_when_empty(self):
-        """When grounded client returns empty text, the tool returns a fallback message."""
-        mock_response = MagicMock()
-        mock_response.text = ""
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content.return_value = mock_response
-
-        with patch("bot.tools.genai.Client", return_value=mock_client):
-            tool_fn = create_web_search()
-
-        result = tool_fn.invoke({"query": "something obscure"})
-        assert result == "No results found."
+def test_tool_definitions_schema():
+    names = {t["function"]["name"] for t in TOOL_DEFINITIONS}
+    assert {"memory_add", "memory_search", "memory_delete", "memory_get_context", "web_search"} == names
