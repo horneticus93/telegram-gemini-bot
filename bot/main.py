@@ -82,11 +82,22 @@ async def main():
     config = uvicorn.Config(web_app, host="0.0.0.0", port=8000, loop="none")
     server = uvicorn.Server(config)
 
+    async def run_telegram():
+        try:
+            await tg_app.initialize()
+            await tg_app.start()
+            await tg_app.updater.start_polling()
+            # Keep running until uvicorn stops (serve() is the main loop)
+            while server.started:
+                await asyncio.sleep(1)
+            await tg_app.updater.stop()
+            await tg_app.stop()
+            await tg_app.shutdown()
+        except Exception as exc:
+            logger.error("Telegram startup failed: %s", exc)
+
     try:
-        await asyncio.gather(
-            tg_app.run_polling(close_loop=False),
-            server.serve(),
-        )
+        await asyncio.gather(run_telegram(), server.serve())
     finally:
         await close_pool()
 
