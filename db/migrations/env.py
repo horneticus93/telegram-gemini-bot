@@ -6,16 +6,9 @@ from db.models import Base
 
 config = context.config
 
-# Ensure we use pg8000 (pure-Python) as the sync driver for migrations.
-# DATABASE_URL may be plain postgresql:// or postgresql+asyncpg:// — normalise it.
-_raw_url = os.environ["DATABASE_URL"]
-if _raw_url.startswith("postgresql://") or _raw_url.startswith("postgres://"):
-    _sync_url = _raw_url.replace("postgresql://", "postgresql+pg8000://", 1).replace(
-        "postgres://", "postgresql+pg8000://", 1
-    )
-else:
-    _sync_url = _raw_url
-config.set_main_option("sqlalchemy.url", _sync_url)
+# Use pg8000 as the sync driver for Alembic (works on Python 3.14+)
+db_url = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+pg8000://", 1)
+config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
