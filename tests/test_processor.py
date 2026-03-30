@@ -8,7 +8,8 @@ def make_tg_message(text=None, photo=None, forward_from=None, entities=None):
     msg.text = text
     msg.caption = None
     msg.photo = photo
-    msg.forward_from = forward_from
+    msg.forward_origin = forward_from  # forward_from is now a mock MessageOrigin
+    msg.forward_from = None  # keep for backward compat with MagicMock
     msg.forward_from_chat = None
     msg.forward_date = None
     msg.entities = entities or []
@@ -59,8 +60,10 @@ async def test_photo_message_downloads_bytes():
 @pytest.mark.asyncio
 async def test_forward_message():
     proc = MessageProcessor(settings=AsyncMock())
-    forward_from = MagicMock(full_name="Alice", id=999)
-    msg = make_tg_message(text="forwarded text", forward_from=forward_from)
+    forward_origin = MagicMock()
+    forward_origin.sender_user_name = "Alice"
+    msg = make_tg_message(text="forwarded text")
+    msg.forward_origin = forward_origin
     result = await proc.process(msg)
     assert result.content_type == "forward"
     assert "Alice" in result.forward_meta
