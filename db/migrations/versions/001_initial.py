@@ -18,7 +18,7 @@ def upgrade() -> None:
         "config",
         sa.Column("key", sa.String, primary_key=True),
         sa.Column("value", JSONB, nullable=False),
-        sa.Column("updated_at", sa.DateTime),
+        sa.Column("updated_at", sa.DateTime, server_default=sa.func.now()),
     )
     op.create_table(
         "chats",
@@ -38,7 +38,7 @@ def upgrade() -> None:
         sa.Column("content_type", sa.String, server_default="text"),
         sa.Column("tokens_used", sa.Integer),
         sa.Column("model_used", sa.String),
-        sa.Column("created_at", sa.DateTime),
+        sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
     )
     op.create_index("ix_message_logs_chat_id", "message_logs", ["chat_id"])
     # node_embeddings uses pgvector — raw SQL needed
