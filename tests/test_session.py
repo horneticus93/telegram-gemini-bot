@@ -1,8 +1,49 @@
 import pytest
+from unittest.mock import AsyncMock
 from bot.session import SessionManager
 
 
-def test_add_and_get_history():
+# ---------------------------------------------------------------------------
+# Task 8 spec tests (settings-based constructor)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_and_get_history():
+    sm = SessionManager(settings=AsyncMock())
+    sm.add_message(chat_id=1, role="user", text="Hello", author="Alice")
+    sm.add_message(chat_id=1, role="assistant", text="Hi!", author="Bot")
+    history = sm.get_recent(chat_id=1)
+    assert len(history) == 2
+    assert history[0]["role"] == "user"
+
+@pytest.mark.asyncio
+async def test_separate_chats():
+    sm = SessionManager(settings=AsyncMock())
+    sm.add_message(chat_id=1, role="user", text="Chat 1", author="A")
+    sm.add_message(chat_id=2, role="user", text="Chat 2", author="B")
+    assert len(sm.get_recent(chat_id=1)) == 1
+    assert sm.get_recent(chat_id=1)[0]["text"] == "Chat 1"
+
+@pytest.mark.asyncio
+async def test_max_history_enforced():
+    sm = SessionManager(settings=AsyncMock(), max_history=5)
+    for i in range(10):
+        sm.add_message(chat_id=1, role="user", text=f"msg{i}", author="U")
+    history = sm.get_recent(chat_id=1)
+    assert len(history) <= 5
+
+@pytest.mark.asyncio
+async def test_summary_stored_and_returned():
+    sm = SessionManager(settings=AsyncMock())
+    sm.set_summary(chat_id=1, summary="This is the summary.")
+    assert sm.get_summary(chat_id=1) == "This is the summary."
+
+
+# ---------------------------------------------------------------------------
+# Full API tests (legacy-compat constructor + all methods)
+# ---------------------------------------------------------------------------
+
+def test_add_and_get_history_legacy():
     """Adding messages stores them and get_history returns all in order."""
     sm = SessionManager(max_messages=50, recent_window=15)
     sm.add_message(1, "user", "Hello", author="Sasha")
