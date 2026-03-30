@@ -1,8 +1,8 @@
-FROM apache/age:latest
+FROM apache/age:PG18_latest
 RUN apt-get update -y \
     && apt-get install -y build-essential postgresql-server-dev-18 git \
     && cd /tmp \
-    && git clone https://github.com/pgvector/pgvector.git \
+    && git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git \
     && cd pgvector \
     && make \
     && make install \
