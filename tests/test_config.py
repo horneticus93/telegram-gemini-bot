@@ -30,3 +30,22 @@ async def test_hot_reload(db):
     await s.reload()
     val = await s.get("chat_model")
     assert val == "gemini/gemini-2.5-pro"
+
+
+@pytest.mark.asyncio
+async def test_set_sensitive_key_encrypts(db):
+    import os
+    from cryptography.fernet import Fernet
+    key = Fernet.generate_key().decode()
+    os.environ["ENCRYPTION_KEY"] = key
+    try:
+        s = Settings(db)
+        await s.set("telegram_bot_token", "secret-token")
+        # raw DB value should be encrypted
+        raw = await db.fetchval("SELECT value FROM config WHERE key = 'telegram_bot_token'")
+        assert raw.startswith('"enc:'), f"Expected encrypted value, got: {raw}"
+        # get() should decrypt it
+        val = await s.get("telegram_bot_token")
+        assert val == "secret-token"
+    finally:
+        del os.environ["ENCRYPTION_KEY"]
