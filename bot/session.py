@@ -73,9 +73,13 @@ class SessionManager:
         """Return True if the number of unsummarized messages meets the threshold."""
         return len(self.get_unsummarized(chat_id)) >= threshold
 
-    def get_summary(self, chat_id: int) -> str:
-        """Return the running summary for a chat, or empty string if none."""
-        return self._summaries.get(chat_id, "")
+    def unsummarized_count(self, chat_id: int) -> int:
+        """Return number of unsummarized messages for this chat."""
+        return len(self.get_unsummarized(chat_id))
+
+    def get_summary(self, chat_id: int) -> str | None:
+        """Return the running summary for a chat, or None if none."""
+        return self._summaries.get(chat_id)
 
     def set_summary(self, chat_id: int, summary: str) -> None:
         """Store a running summary for a chat."""

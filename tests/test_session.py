@@ -156,7 +156,7 @@ def test_summary_storage():
     sm = SessionManager()
 
     # No summary yet
-    assert sm.get_summary(1) == ""
+    assert sm.get_summary(1) is None
 
     sm.set_summary(1, "User discussed travel plans.")
     assert sm.get_summary(1) == "User discussed travel plans."
@@ -174,7 +174,7 @@ def test_summary_per_chat_isolation():
 
     assert sm.get_summary(1) == "Summary for chat 1"
     assert sm.get_summary(2) == "Summary for chat 2"
-    assert sm.get_summary(3) == ""
+    assert sm.get_summary(3) is None
 
 
 def test_needs_summary():
