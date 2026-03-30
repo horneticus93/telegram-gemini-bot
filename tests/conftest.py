@@ -1,33 +1,39 @@
 import os
-import tempfile
-
-# Set DB_PATH before any bot module is imported — prevents PermissionError
-# when bot.handlers tries to create /app/data/ on macOS during tests
-os.environ.setdefault("DB_PATH", os.path.join(tempfile.mkdtemp(), "test_memory.db"))
-
 import pytest
-from alembic.config import Config
+import asyncpg
+from alembic.config import Config as AlembicConfig
 from alembic import command
 
-# Run alembic migrations on the test database once before tests
-alembic_cfg = Config("alembic.ini")
-# Override the sqlalchemy.url to point to our temp test DB
-alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{os.environ['DB_PATH']}")
-command.upgrade(alembic_cfg, "head")
+TEST_DB_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql://bot:bot@localhost:5432/botdb_test"
+)
 
-@pytest.fixture(autouse=True)
-def reset_user_memory_db():
-    """Reset the shared user_memory DB between tests to prevent state leakage."""
-    import sqlite3
-    from bot.handlers import user_memory
-    with sqlite3.connect(user_memory.db_path) as conn:
-        conn.execute("DELETE FROM user_profiles")
-        conn.execute("DELETE FROM chat_memberships")
-        conn.execute("DELETE FROM memory_facts")
-        conn.commit()
+
+@pytest.fixture(scope="session", autouse=True)
+def run_migrations():
+    """Apply Alembic migrations to test DB once per session."""
+    cfg = AlembicConfig("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", TEST_DB_URL)
+    command.upgrade(cfg, "head")
     yield
-    with sqlite3.connect(user_memory.db_path) as conn:
-        conn.execute("DELETE FROM user_profiles")
-        conn.execute("DELETE FROM chat_memberships")
-        conn.execute("DELETE FROM memory_facts")
-        conn.commit()
+    command.downgrade(cfg, "base")
+
+
+@pytest.fixture
+async def pool(run_migrations):
+    """asyncpg pool connected to test DB. Used by components that call pool.acquire()."""
+    p = await asyncpg.create_pool(TEST_DB_URL, min_size=1, max_size=3)
+    yield p
+    async with p.acquire() as conn:
+        await conn.execute("DELETE FROM message_logs")
+        await conn.execute("DELETE FROM config")
+        await conn.execute("DELETE FROM chats")
+        await conn.execute("DELETE FROM node_embeddings")
+    await p.close()
+
+
+@pytest.fixture
+async def db(pool):
+    """Single asyncpg connection. Used by components that take a connection directly."""
+    async with pool.acquire() as conn:
+        yield conn

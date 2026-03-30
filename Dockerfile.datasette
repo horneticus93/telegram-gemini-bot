@@ -8,7 +8,7 @@ USER datasette-user
 
 EXPOSE 8001
 
-CMD ["datasette", "/app/data/memory.db", \
+CMD ["datasette", "/app/data/", \
      "--host", "0.0.0.0", \
      "--port", "8001", \
      "--setting", "allow_execute_sql", "on"]

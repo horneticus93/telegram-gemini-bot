@@ -1,53 +1,106 @@
-import os
+import asyncio
 import logging
-from dotenv import load_dotenv
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    MessageHandler,
-    filters,
-)
-from .handlers import handle_message
-from .memory_handlers import (
-    handle_memory_callback,
-    handle_memory_command,
-    handle_memory_edit_reply,
-)
+import os
+import sys
 
-load_dotenv()
+import uvicorn
+from telegram.ext import Application, MessageHandler as TGMessageHandler, filters
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+from db.pool import get_pool, close_pool
+from bot.config import Settings
+from bot.session import SessionManager
+from bot.processor import MessageProcessor
+from bot.context import ContextBuilder
+from bot.llm import LLMService
+from memory.graph import GraphMemory
+from memory.embeddings import EmbeddingService
+from bot.handlers import MessageHandler
+from bot.tools import execute_tool
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 
-async def _message_dispatcher(update, context):
-    """Dispatch text messages: try edit-reply first, then normal handler."""
-    consumed = await handle_memory_edit_reply(update, context)
-    if not consumed:
-        await handle_message(update, context)
+async def build_app():
+    pool = await get_pool()
+    settings = Settings(pool)
+    await settings.reload()
+
+    # Seed initial settings from ENV if not yet in DB
+    for key, env_var in [
+        ("telegram_bot_token", "TELEGRAM_BOT_TOKEN"),
+        ("gemini_api_key", "GEMINI_API_KEY"),
+        ("allowed_chat_ids", "ALLOWED_CHAT_IDS"),
+        ("admin_telegram_ids", "ADMIN_TELEGRAM_IDS"),
+        ("chat_model", "CHAT_MODEL"),
+        ("vision_model", "VISION_MODEL"),
+        ("embedding_model", "EMBEDDING_MODEL"),
+        ("summarization_model", "SUMMARIZATION_MODEL"),
+    ]:
+        if await settings.get(key) is None and os.environ.get(env_var):
+            raw = os.environ[env_var]
+            if key in ("allowed_chat_ids", "admin_telegram_ids"):
+                value = [int(x.strip()) for x in raw.split(",") if x.strip()]
+            else:
+                value = raw
+            await settings.set(key, value)
+
+    graph = GraphMemory(pool)
+    embeddings = EmbeddingService(settings, pool)
+
+    async def memory_search(query: str, limit: int):
+        ids = await embeddings.search_text(query, limit=limit)
+        return await graph.search_by_ids(ids)
+
+    session = SessionManager(settings)
+    processor = MessageProcessor(settings)
+    ctx_builder = ContextBuilder(session=session, memory_search=memory_search, settings=settings)
+    llm = LLMService(settings=settings, graph=graph, embeddings=embeddings)
+    handler = MessageHandler(
+        settings=settings, session=session, processor=processor,
+        context_builder=ctx_builder, llm=llm, pool=pool,
+    )
+
+    token = await settings.get("telegram_bot_token")
+    tg_app = Application.builder().token(token).build()
+    tg_app.add_handler(TGMessageHandler(filters.ALL, handler.handle))
+
+    return tg_app, pool
 
 
-def main() -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
+async def main():
+    tg_app, pool = await build_app()
 
-    if not os.getenv("GEMINI_API_KEY"):
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
+    # Placeholder FastAPI app (web panel added in Plan B)
+    from fastapi import FastAPI
+    web_app = FastAPI()
 
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("memory", handle_memory_command))
-    app.add_handler(CallbackQueryHandler(handle_memory_callback, pattern=r"^mem:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _message_dispatcher))
+    @web_app.get("/health")
+    async def health():
+        return {"status": "ok"}
 
-    logger.info("Bot starting, polling for updates...")
-    app.run_polling(drop_pending_updates=True)
+    config = uvicorn.Config(web_app, host="0.0.0.0", port=8000, loop="none")
+    server = uvicorn.Server(config)
+
+    async def run_telegram():
+        try:
+            await tg_app.initialize()
+            await tg_app.start()
+            await tg_app.updater.start_polling()
+            # Keep running until uvicorn stops (serve() is the main loop)
+            while server.started:
+                await asyncio.sleep(1)
+            await tg_app.updater.stop()
+            await tg_app.stop()
+            await tg_app.shutdown()
+        except Exception as exc:
+            logger.error("Telegram startup failed: %s", exc)
+
+    try:
+        await asyncio.gather(run_telegram(), server.serve())
+    finally:
+        await close_pool()
 
 
 if __name__ == "__main__":
-    main()
-
+    asyncio.run(main())

@@ -139,6 +139,16 @@ alembic upgrade head
 | `MAX_HISTORY_MESSAGES` | No | `100` | How many messages to keep in context per chat |
 | `MEMORY_UPDATE_INTERVAL` | No | `10` | How many messages between automatic profile updates |
 | `DB_PATH` | No | `/app/data/memory.db` | Path to the Alembic-managed SQLite database |
+| `GEMINI_PRO_MODEL` | No | `gemini-2.5-pro` | Main agent model |
+| `GEMINI_FLASH_MODEL` | No | `gemini-2.0-flash` | Flash sub-agent model |
+| `GEMINI_FLASH_LITE_MODEL` | No | `gemini-2.0-flash-lite` | Lite sub-agent model |
+| `ORCHESTRATOR_TIMEOUT` | No | `15` | Max seconds for full orchestrator pipeline |
+| `SUBAGENT_TIMEOUT` | No | `8` | Max seconds per individual sub-agent |
+| `MAX_LINKS_PER_MESSAGE` | No | `3` | Max URLs processed per message |
+| `MAX_IMAGES_PER_MESSAGE` | No | `5` | Max images processed per message |
+| `MENTION_DETECTOR_CONFIDENCE` | No | `0.7` | Confidence threshold for mention detection |
+| `MEMORY_RETRIEVER_TOP_K` | No | `5` | Number of top memory results to retrieve |
+| `RELEVANCE_JUDGE_THRESHOLD` | No | `0.6` | Relevance score threshold for filtering results |
 
 ### Available Gemini models
 
