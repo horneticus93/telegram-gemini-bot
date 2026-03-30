@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from bot.config import Settings
 
@@ -34,7 +36,6 @@ async def test_hot_reload(db):
 
 @pytest.mark.asyncio
 async def test_set_sensitive_key_encrypts(db):
-    import os
     from cryptography.fernet import Fernet
     key = Fernet.generate_key().decode()
     os.environ["ENCRYPTION_KEY"] = key
