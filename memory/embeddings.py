@@ -1,5 +1,4 @@
 import litellm
-from typing import Any
 
 
 class EmbeddingService:
@@ -11,10 +10,15 @@ class EmbeddingService:
         """Embed text via LiteLLM using the configured embedding model."""
         model = await self._settings.get("embedding_model")
         response = await litellm.aembedding(model=model, input=[text])
-        return response.data[0].embedding
+        vector = response.data[0].embedding
+        if not vector:
+            raise ValueError(f"litellm returned empty embedding for model {model!r}")
+        return vector
 
     async def save(self, node_id: int, text: str) -> None:
         """Embed text and store in node_embeddings table."""
+        if self._pool is None:
+            raise RuntimeError("EmbeddingService.save() requires a database pool")
         vector = await self.embed(text)
         vector_str = "[" + ",".join(str(round(v, 6)) for v in vector) + "]"
         await self._pool.execute(
@@ -30,6 +34,8 @@ class EmbeddingService:
 
     async def search(self, query_vector: list[float], limit: int = 5) -> list[int]:
         """Return node_ids sorted by cosine similarity to query_vector."""
+        if self._pool is None:
+            raise RuntimeError("EmbeddingService.search() requires a database pool")
         vector_str = "[" + ",".join(str(round(v, 6)) for v in query_vector) + "]"
         rows = await self._pool.fetch(
             """
