@@ -10,7 +10,7 @@ async def graph(pool):
     # cleanup all test nodes
     async with pool.acquire() as conn:
         await conn.execute("LOAD 'age'")
-        await conn.execute("SET search_path = ag_catalog, '$user', public")
+        await conn.execute('SET search_path = ag_catalog, "$user", public')
         await conn.execute(
             "SELECT * FROM ag_catalog.cypher('memory', $$ MATCH (n) DETACH DELETE n $$) AS (r ag_catalog.agtype)"
         )

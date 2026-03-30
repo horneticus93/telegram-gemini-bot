@@ -15,8 +15,8 @@ def _parse_agtype(raw: str) -> Any:
 
 
 def _cypher_ident(s: str) -> str:
-    """Backtick-quote a Cypher identifier to prevent injection."""
-    return f"`{s.replace(chr(92), chr(92)*2).replace(chr(96), chr(92)+chr(96))}`"
+    """Backtick-quote a Cypher identifier to prevent injection (openCypher spec: double-backtick escaping)."""
+    return f"`{s.replace('`', '``')}`"
 
 
 def _cypher_literal(v: Any) -> str:
